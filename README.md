@@ -3,111 +3,145 @@
 > **量化模型代號：LVIS V2（Leviathan Intelligent Volume Strategy）**
 > 本系統以 PineScript v6 策略為核心，透過 TradingView Webhook 驅動後端多帳戶自動下單，並提供完整的客戶端與管理端 Web 儀表板。
 
+## 🌐 線上網址
+
+**前端（GitHub Pages）**：https://awesomerex09.github.io/leviathan-trading/
+
 ---
 
 ## 專案目錄結構
 
 ```
 auto/
-├── README.md               ← 本文件
-├── v6.txt                  ← LVIS V2 PineScript 量化策略原始碼 (機密)
-├── list.txt                ← 投資標的觀察清單 (機密)
+├── README.md                     ← 本文件
+├── v6.txt                        ← LVIS V2 PineScript 策略原始碼（機密）
+├── list.txt                      ← 投資標的觀察清單（49 個標的，機密）
+├── .github/workflows/deploy.yml  ← GitHub Actions 自動部署設定
 │
-├── frontend/               ← 前端 React SPA (部署於 GitHub Pages 或靜態伺服器)
-│   ├── public/
-│   │   ├── favicon.svg     ← Leviathan 品牌 Logo
-│   │   └── icons.svg
+├── frontend/                     ← 前端 React SPA
+│   ├── public/favicon.svg        ← Leviathan 品牌 Logo
 │   └── src/
-│       ├── main.jsx        ← 程式進入點
-│       ├── App.jsx         ← 主路由與 UI 邏輯
-│       ├── Chart.jsx       ← TradingView Lightweight Charts K線元件
-│       ├── firebase.js     ← Firebase Client SDK 初始化
-│       ├── index.css       ← 全局樣式 (網點背景/白色主題)
-│       └── App.css
+│       ├── App.jsx               ← 主路由（Landing / Client / Admin）
+│       ├── i18n.js               ← 中英文多語言支援（自動偵測華人地區）
+│       ├── api.js                ← 集中式安全 API 客戶端（自動附加 Firebase Token）
+│       ├── firebase.js           ← Firebase Client SDK 初始化
+│       ├── Chart.jsx             ← TradingView Lightweight Charts K線元件
+│       ├── index.css             ← 全局樣式
+│       └── pages/
+│           ├── ClientDashboard.jsx ← 客戶儀表板（下單紀錄/K線/憑證設定）
+│           └── AdminDashboard.jsx  ← 管理員後台（客戶管理/Watchlist/策略腳本）
 │
-└── server/                 ← Python 後端 (部署於 Mac mini - 常駐運行)
-    ├── serviceAccountKey.json  ← Firebase Admin 金鑰 (機密，不上傳 Git)
-    ├── requirements.txt    ← 套件清單
-    ├── main.py             ← FastAPI 主程式，Webhook 接收端
-    ├── core_trader.py      ← 多執行緒多帳戶下單核心 (Shioaji)
-    ├── firebase_client.py  ← Firebase Admin SDK，讀寫 Firestore
-    ├── order_logger.py     ← 下單紀錄寫回 Firestore
-    ├── admin_api.py        ← 管理員後台 API (watchlist/策略腳本管理)
-    ├── chart_api.py        ← K 線歷史資料與交易 Marker API
-    ├── mock_signal.py      ← 測試用 Webhook 模擬腳本
-    └── telegram_notifier.py ← Telegram Bot 下單結果通知
+└── server/                       ← Python 後端（部署於 Mac mini - 常駐運行）
+    ├── serviceAccountKey.json    ← Firebase Admin 金鑰（機密，不上傳 Git）
+    ├── .env.example              ← 環境變數範本（複製為 .env 並填入實際值）
+    ├── requirements.txt          ← Python 套件清單
+    ├── main.py                   ← FastAPI 主程式，Webhook 接收端
+    ├── core_trader.py            ← 多執行緒多帳戶下單核心（Shioaji）
+    ├── firebase_client.py        ← Firebase Admin SDK（AES 加解密 + Firestore 操作）
+    ├── admin_api.py              ← 管理員 API 路由（雙重驗證）
+    ├── order_logger.py           ← 下單紀錄即時寫回 Firestore
+    ├── chart_api.py              ← K 線資料與交易 Marker API
+    ├── firestore.rules           ← Firestore Security Rules（需貼到 Firebase Console）
+    ├── verify_firebase.py        ← Firebase 連線驗證腳本
+    ├── mock_signal.py            ← 測試用 Webhook 模擬腳本
+    └── telegram_notifier.py      ← Telegram Bot 下單通知
 ```
 
 ---
 
-## 系統架構設計
+## 🚀 快速啟動
+
+### 前端（本地開發）
+```bash
+cd frontend
+npm install
+npm run dev
+# 開啟 http://localhost:5173/leviathan-trading/
+```
+
+### 後端（Mac mini 部署）
+```bash
+cd server
+# 1. 複製環境變數範本
+cp .env.example .env
+# 2. 填入 AES_SECRET_KEY 和 WEBHOOK_SECRET
+# 3. 確認 serviceAccountKey.json 存在
+pip install -r requirements.txt
+# 4. 驗證 Firebase 連線
+python verify_firebase.py
+# 5. 啟動伺服器
+python main.py
+```
+
+---
+
+## 系統架構
 
 ### 數據流
 ```
 TradingView Webhook
-      │  POST /webhook (with auth header)
+      │  POST /webhook?secret=xxx
       ▼
-FastAPI Server (Mac mini)
+FastAPI Server（Mac mini - 24/7 常駐）
       │
       ├── 驗證 Webhook Secret
-      ├── firebase_client.py → 撈取 isActive=true 的付費用戶
-      ├── core_trader.py     → Multi-thread 併發下單 (Shioaji)
-      └── order_logger.py    → 將成交紀錄寫入 Firestore
+      ├── firebase_client.py → 撈取 isActive=true 的付費用戶（AES 解密憑證）
+      ├── core_trader.py     → Multi-thread 併發下單（Shioaji）
+      └── order_logger.py   → 成交紀錄寫入 Firestore
 ```
 
-### Firebase 資料庫結構 (Firestore)
+### Firebase Firestore 結構
 ```
 /users/{uid}
   - email: string
-  - isPaid: boolean         ← 是否為付費訂閱者
-  - isActive: boolean       ← 是否啟用自動下單（客戶自行控制）
-  - api_key_enc: string     ← AES-256 加密後的 API Key
-  - secret_key_enc: string  ← AES-256 加密後的 Secret Key
-  - ca_path: string         ← 憑證路徑（存伺服器本機）
-  - ca_password_enc: string ← 加密後的憑證密碼
-  - person_id: string       ← 身分證字號
-  - positions: array        ← 目前資產配置
-  - orders: array           ← 歷史下單紀錄
+  - isPaid: boolean           ← 管理員開通
+  - isActive: boolean         ← 客戶自行控制（暫停/開始下單）
+  - api_key_enc: string       ← AES-256 加密
+  - secret_key_enc: string    ← AES-256 加密
+  - ca_password_enc: string   ← AES-256 加密
+  - ca_path: string
+  - person_id: string
+  /orders/{auto_id}
+    - symbol, action, price, quantity, status, timestamp
 
-/watchlist
-  /config (doc)
-  - symbols: array          ← 投資標的觀察清單（Admin 管理）
+/watchlist/config
+  - symbols: array            ← Admin 管理的投資標的清單
 
-/strategy
-  /v6 (doc)
-  - script: string          ← LVIS 量化模型腳本（Admin 管理）
+/strategy/v6
+  - script: string            ← LVIS 量化模型腳本
   - updated_at: timestamp
 ```
 
 ---
 
-## 使用者角色與功能
+## 使用者角色
 
-### Client (訂閱者)
-- Google 帳號登入
-- 查看自己的下單紀錄
-- 查看自己的資產配置
-- 暫停 / 開始自動化下單（寫入 `isActive` flag）
-- K 線圖表與回測/實盤對帳分析
+### Client（訂閱者）
+- Google 帳號登入（自動跳轉到客戶儀表板）
+- 查看下單紀錄
+- 查看 K 線圖與回測/實盤對帳分析
+- 暫停/開始自動化下單
+- 設定 Shioaji API 憑證（後端加密存儲）
 
-### Admin (管理員 - 您)
-- 查看**所有客戶**的下單狀況與資產配置
-- 強制暫停/開始任意客戶的自動化下單
-- 管理投資標的觀察清單 (Watchlist)
-- 線上編輯量化模型底層腳本
+### Admin（管理員）
+- 登入後自動跳轉到管理員後台
+- 查看所有客戶狀況
+- 開通/取消付費、強制暫停/啟動下單
+- 線上編輯投資標的觀察清單（list.txt 同步）
+- 線上編輯 LVIS V2 量化策略腳本（v6.txt 同步）
 
 ---
 
-## 資安設計
+## 🔐 資安設計
 
 | 資產 | 保護方式 |
 |------|----------|
-| 客戶 API Key / Secret | AES-256 加密儲存於 Firestore |
-| 量化模型腳本 (v6.txt) | 儲存於 Server 本機 + Firestore，前端透過 Token 驗證讀寫 |
-| Firebase Admin 金鑰 | 只存於 Server 本機，絕不打包進前端 |
+| 客戶 API Key / Secret | AES-256-CBC 加密儲存於 Firestore |
+| 量化模型腳本 | 存於 Server 本機 + Firestore，Admin Token 驗證讀寫 |
+| Firebase Admin 金鑰 | 只存於 Server 本機，不上傳 Git（`.gitignore` 保護） |
 | 後端 Webhook | 驗證 Secret Header，防止偽造請求 |
-| Admin Panel | 透過 Firebase ID Token + Admin UID 白名單雙重驗證 |
-| Firestore Security Rules | 每個用戶只能讀寫自己的文件，Admin 才能讀所有文件 |
+| Admin Panel | Firebase ID Token + Admin UID 白名單雙重驗證 |
+| Firestore Rules | 用戶只能讀寫自己的文件，禁止前端直接寫入 |
 
 ---
 
@@ -115,35 +149,66 @@ FastAPI Server (Mac mini)
 
 | 層次 | 技術 |
 |------|------|
-| 前端框架 | Vite + React |
-| 圖表套件 | TradingView Lightweight Charts |
-| 身份驗證 | Firebase Authentication (Google Sign-In) |
+| 前端框架 | Vite + React 19 |
+| 圖表套件 | TradingView Lightweight Charts v5 |
+| 多語言 | 內建 i18n（中文/英文，自動偵測華人地區） |
+| 身份驗證 | Firebase Authentication（Google Sign-In） |
 | 雲端資料庫 | Firebase Firestore |
 | 後端框架 | Python FastAPI + uvicorn |
-| 加密 | PyCryptodome (AES-256-CBC) |
+| 加密 | PyCryptodome（AES-256-CBC） |
 | 下單 API | 永豐金 Shioaji SDK |
 | 通知 | Telegram Bot API |
-| 部署 | 前端：GitHub Pages / Vercel，後端：Mac mini 常駐 |
+| CI/CD | GitHub Actions → GitHub Pages |
+| 部署 | 前端：GitHub Pages，後端：Mac mini 常駐 |
 
 ---
 
-## 設計決策記錄 (Q&A)
+## ⚙️ 環境變數設定
 
-- **量化模型名稱？** LVIS V2（Leviathan Intelligent Volume Strategy）
-- **訊號來源？** TradingView Webhook → FastAPI Server
-- **Telegram 用途？** 用於下單成功/失敗的結果回報
-- **部署環境？** 開發中：Windows 本地 PC；正式：Mac mini Server
-- **訂閱費用？** $79 USD/月，透過 [Whop](https://whop.com/leviathan-6c7d/leviathan-signals/) 收款
-- **回測/實盤比對？** K 線圖表上同時顯示策略訊號點與實際成交點，方便監控滑價
+### 後端（`server/.env`）
+```env
+AES_SECRET_KEY=your_32_char_secret_key_here!!  # 必須 32 字元
+WEBHOOK_SECRET=your_webhook_secret_here
+ADMIN_UIDS=Za2Y2KDjDDVLI7qkHCyhqdfnrMu1        # 您的 Firebase UID
+SERVICE_ACCOUNT_PATH=serviceAccountKey.json
+```
+
+### GitHub Actions 環境變數
+已在 https://github.com/awesomerex09/leviathan-trading/settings/variables/actions 設定：
+- `VITE_ADMIN_UID` = `Za2Y2KDjDDVLI7qkHCyhqdfnrMu1`
+- `VITE_API_BASE` = Mac mini 部署後更新為實際 IP 或 ngrok URL
 
 ---
 
-## 開發進度
+## 📋 部署到 Mac mini 的步驟
 
-- [x] 階段一：Firebase 環境建置與前端基礎
-- [x] 階段二：Python 後端雛形建立
-- [x] 階段三：K 線圖表與實盤對帳分析基礎
-- [/] 階段四：完整後端安全化改寫（進行中）
-- [ ] 階段五：完整客戶端儀表板
-- [ ] 階段六：管理員後台 (Admin Panel)
-- [ ] 階段七：Firestore Security Rules 部署
+1. **複製 server/ 資料夾**到 Mac mini
+2. **複製 serviceAccountKey.json** 到 Mac mini 的 server/ 目錄
+3. **建立 .env**（參考 .env.example）
+4. **安裝套件**：`pip install -r requirements.txt`
+5. **驗證連線**：`python verify_firebase.py`
+6. **啟動伺服器**：`python main.py`（或設定 launchd 常駐）
+7. **取得公開 IP**（建議使用 Cloudflare Tunnel 或 ngrok 取得 HTTPS URL）
+8. **更新 GitHub Actions 變數** `VITE_API_BASE` 為 Mac mini 的公開 URL
+9. **重新觸發部署**（push 任意修改到 main 即可自動部署）
+
+---
+
+## 📝 設計決策記錄
+
+- **量化模型名稱**：LVIS V2（Leviathan Intelligent Volume Strategy）
+- **訊號來源**：TradingView Webhook → FastAPI Server
+- **多語言預設**：自動偵測瀏覽器語言，華人地區（zh-TW, zh-CN 等）預設中文
+- **訂閱費用**：$79 USD/月，透過 [Whop](https://whop.com/leviathan-6c7d/leviathan-signals/) 收款
+- **K 線圖表**：TradingView Lightweight Charts，疊加回測訊號點與實際成交點
+- **Admin 識別**：透過 Firebase UID 白名單（`Za2Y2KDjDDVLI7qkHCyhqdfnrMu1`）
+
+---
+
+## 🔗 相關連結
+
+- **線上網站**：https://awesomerex09.github.io/leviathan-trading/
+- **GitHub 倉庫**：https://github.com/awesomerex09/leviathan-trading
+- **Firebase Console**：https://console.firebase.google.com/project/autolvis
+- **訂閱頁面**：https://whop.com/leviathan-6c7d/leviathan-signals/
+- **Shioaji API 文件**：https://sinotrade.github.io/
