@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { auth, ADMIN_UID } from './firebase';
 import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from 'firebase/auth';
-import { Loader2, LogOut, BarChart2, ShieldCheck, TrendingUp, Server, Globe } from 'lucide-react';
+import { Loader2, LogOut, BarChart2, ShieldCheck, TrendingUp, Globe } from 'lucide-react';
 import ClientDashboard from './pages/ClientDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import { detectLanguage, getTranslations } from './i18n';
+import logoUrl from '/favicon.svg';
 import './index.css';
 
 function App() {
@@ -59,7 +60,7 @@ function App() {
   if (loading) {
     return (
       <div className="loading-screen">
-        <img src="/favicon.svg" alt="Leviathan" className="loading-logo" />
+        <img src={logoUrl} alt="Leviathan" className="loading-logo" />
         <p>{t.loading}</p>
       </div>
     );
@@ -73,7 +74,7 @@ function App() {
         <nav className="navbar">
           <div className="nav-left">
             <div className="logo">
-              <img src="/favicon.svg" alt="Leviathan Logo" />
+              <img src={logoUrl} alt="Leviathan Logo" />
               LEVIATHAN<sup style={{ fontSize: '0.6em', marginLeft: '2px' }}>®</sup>
             </div>
             {isAdmin && (
@@ -107,7 +108,7 @@ function App() {
       <nav className="navbar">
         <div className="nav-left">
           <div className="logo" onClick={() => setView('home')} style={{ cursor: 'pointer' }}>
-            <img src="/favicon.svg" alt="Leviathan Logo" />
+            <img src={logoUrl} alt="Leviathan Logo" />
             LEVIATHAN<sup style={{ fontSize: '0.6em', marginLeft: '2px' }}>®</sup>
           </div>
           <div className="nav-links">
@@ -159,7 +160,6 @@ function App() {
               { icon: <TrendingUp size={28} />, title: t.feature_strategy_title, desc: t.feature_strategy_desc },
               { icon: <BarChart2 size={28} />, title: t.feature_chart_title, desc: t.feature_chart_desc },
               { icon: <ShieldCheck size={28} />, title: t.feature_security_title, desc: t.feature_security_desc },
-              { icon: <Server size={28} />, title: t.feature_multi_title, desc: t.feature_multi_desc },
             ].map((f, i) => (
               <div className="feature-card" key={i}>
                 {f.icon}

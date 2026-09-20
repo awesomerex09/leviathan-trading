@@ -1,6 +1,3 @@
-# Firestore Security Rules
-# 複製以下規則，貼到 Firebase Console -> Firestore Database -> Rules 標籤
-
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -8,58 +5,50 @@ service cloud.firestore {
     // ============================================================
     // 工具函式
     // ============================================================
-
-    // 判斷是否已登入
     function isSignedIn() {
       return request.auth != null;
     }
 
-    // 判斷是否為文件的擁有者
     function isOwner(uid) {
       return isSignedIn() && request.auth.uid == uid;
     }
 
-    // 判斷是否為管理員（Admin UID 白名單）
-    // 請將下方 'YOUR_ADMIN_UID' 替換成您的 Firebase UID
+    // Admin UID 白名單 - 請確認此 UID 與 firebase.js 中的 ADMIN_UID 一致
     function isAdmin() {
-      return isSignedIn() && request.auth.uid in ['YOUR_ADMIN_UID'];
+      return isSignedIn() && request.auth.uid == 'Za2Y2KDjDDVLI7qkHCyhqdfnrMu1';
     }
 
     // ============================================================
-    // /users/{uid} - 用戶個人資料
+    // /users/{uid}
     // ============================================================
     match /users/{uid} {
-      // 用戶只能讀自己的資料；Admin 可以讀所有人
+      // 用戶讀自己；Admin 讀所有
       allow read: if isOwner(uid) || isAdmin();
 
-      // 用戶只能更新特定欄位（isActive），不能改自己的 isPaid
-      // 寫入由後端伺服器完成（後端有 Admin 金鑰，擁有完整寫入權）
-      // 前端只能用 Bearer Token 呼叫我們的 FastAPI，由 FastAPI 寫入
-      allow write: if false; // 禁止前端直接寫入，必須透過後端 API
+      // Admin 可以直接更新用戶狀態（isPaid / isActive）
+      // 一般用戶不能寫（憑證寫入由後端 API 負責，透過 Firebase Admin SDK）
+      allow write: if isAdmin();
 
-      // 下單紀錄子集合
       match /orders/{orderId} {
-        // 用戶只能讀自己的下單紀錄；Admin 可讀所有
         allow read: if isOwner(uid) || isAdmin();
-        // 禁止前端直接寫入（由後端 order_logger.py 寫入）
-        allow write: if false;
+        allow write: if false; // 只有後端 Admin SDK 能寫
       }
     }
 
     // ============================================================
-    // /watchlist - 投資標的清單（只有 Admin 可以讀寫）
+    // /watchlist - Admin 可以讀寫（直接從前端操作）
     // ============================================================
     match /watchlist/{docId} {
-      allow read: if isAdmin();
-      allow write: if false; // 只能透過後端 admin_api.py 寫入
+      allow read: if isSignedIn();   // 後端伺服器讀取時也需要，這裡開放已登入用戶
+      allow write: if isAdmin();
     }
 
     // ============================================================
-    // /strategy - 量化策略腳本（只有 Admin 可以讀寫）
+    // /strategy - Admin 可以讀寫（直接從前端操作）
     // ============================================================
     match /strategy/{docId} {
       allow read: if isAdmin();
-      allow write: if false; // 只能透過後端 admin_api.py 寫入
+      allow write: if isAdmin();
     }
 
     // ============================================================
