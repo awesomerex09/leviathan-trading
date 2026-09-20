@@ -1,0 +1,10 @@
+shioaji
+firebase-admin
+fastapi
+uvicorn[standard]
+python-telegram-bot
+pycryptodome
+requests
+logbook
+httpx
+python-dotenv

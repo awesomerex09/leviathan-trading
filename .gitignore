@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Build outputs
+frontend/dist/
+frontend/.vite/
+
+# Secrets - NEVER commit these!
+server/serviceAccountKey.json
+.env
+.env.local
+.env.*.local
+*.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logbook.log
+
+# IDE
+.vscode/
+.idea/
+
+# Python venv
+venv/
+env/
+.venv/

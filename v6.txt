@@ -1,0 +1,350 @@
+//@version=6
+// 核心修正：加入 margin_long = 10，釋放槓桿空間，避免因手續費或倍數導致訂單被系統吃掉
+strategy(' LVIS V2 快訊 (動態浮動加碼完整版)', overlay = true, max_lines_count = 100, initial_capital = 1000000, default_qty_type = strategy.percent_of_equity, default_qty_value = 20, pyramiding = 4, commission_type = strategy.commission.percent, commission_value = 0.5, slippage = 3, process_orders_on_close = true, margin_long = 10)
+
+// ==============================================================================
+// 視覺風格配色方案 (暗黑蜘蛛人主題) 
+// ==============================================================================
+color_spidey_blue = #002855 // 深海藍 (獲利/多頭)
+color_spidey_red  = #8B0000 // 暗紅色 (止損/虧損)
+
+// === 0. Webhook JSON 負載預設格式 ===
+string jsonStruct   = '{"content": "🏛️ **[LVIS] Structural Entry Triggered**\\nSymbol: {{ticker}}\\nPrice: {{close}}\\nStrategy: Structural Breakout\\n\\n📩 *DM @villain5501 for Pro version*"}'
+string jsonTrend    = '{"content": "🌊 **[LVIS] Trend Entry Triggered**\\nSymbol: {{ticker}}\\nPrice: {{close}}\\nStrategy: Trend Continuation\\n\\n📩 *DM @villain5501 for Pro version*"}'
+string jsonTakeover = '{"content": "🛡️ **[LVIS] Position Takeover Initiated**\\nSymbol: {{ticker}}\\nPrice: {{close}}\\nStrategy: Manual Takeover\\n\\n📩 *DM @villain5501 for Pro version*"}'
+string jsonAdd      = '{"content": "🔼 **[LVIS] Dynamic Pyramiding**\\nSymbol: {{ticker}}\\nPrice: {{close}}\\nAction: Scale In\\n\\n📩 *DM @villain5501 for Pro version*"}'
+string jsonExit     = '{"content": "🛑 **[LVIS] Position Liquidated**\\nSymbol: {{ticker}}\\nPrice: {{close}}\\nAction: Close All Positions\\n\\n📩 *DM @villain5501 for Pro version*"}'
+
+// === 1. Parameters Setup ===
+atrLen = 14 
+pivotSide = 11 
+volFactor = 1.1 
+mergeThreshold = 0.01 
+
+grp_mode = 'System Operation Mode'
+runMode = input.string('Wait for Signal', 'Operation Mode', options = ['Wait for Signal', 'Force Takeover'], group = grp_mode)
+manualPrice = input.float(0.0, 'Takeover Cost Price (0 = Current Close)', group = grp_mode)
+defaultTime = input.time(timestamp('2026-03-04 09:00'), 'Default Target Time', group = grp_mode)
+
+// V2 Benchmark & Dynamic Leverage Settings
+grp_bench = 'LVIS V2 Benchmark & Sizing Settings'
+benchmarkTicker = input.symbol('TWSE:0050', 'Benchmark Ticker', group = grp_bench)
+regimeMethod = input.string('Relative Drawdown', 'Regime Method', options = ['Relative Drawdown', 'Rolling Alpha'], group = grp_bench)
+regimeWindow = input.int(60, 'Regime Evaluation Window', minval = 1, group = grp_bench)
+thresholdHigh = input.float(0.08, 'Up-Leverage / Down-Leverage Threshold High', group = grp_bench)
+thresholdLow = input.float(-0.02, 'Up-Leverage / Down-Leverage Threshold Low', group = grp_bench)
+coolingPeriod = input.int(20, 'Leverage Switch Cooling Period', minval = 1, group = grp_bench)
+riskPct = input.float(0.20, 'Position Sizing Risk % (risk_pct)', minval = 0.0, maxval = 1.0, step = 0.01, group = grp_bench)
+
+// Dynamic start time selector
+targetTime = switch syminfo.ticker
+    "2360"  => timestamp('2026-05-28 09:00')
+    "3595"  => timestamp('2026-05-28 09:00')
+    "CIEN"  => timestamp('2026-06-01 09:00')
+    "HUT"   => timestamp('2026-06-01 09:00')
+    "WULF"  => timestamp('2026-06-01 09:00')
+    "POWL"  => timestamp('2026-06-01 09:00')
+    "BELFA" => timestamp('2026-06-01 09:00')
+    "VISN"  => timestamp('2026-06-01 09:00')
+    "AEHR"  => timestamp('2026-06-01 09:00')
+    "AAOI"  => timestamp('2026-06-01 09:00')
+    "NVDA"  => timestamp('2026-06-01 09:00')
+    "INSW"  => timestamp('2026-07-13 09:00')
+    "RHLD"  => timestamp('2026-06-01 09:00')
+    "TNGX"  => timestamp('2026-06-10 09:00')
+    "MPTI"  => timestamp('2026-06-10 09:00')
+    "CRDO"  => timestamp('2026-06-10 09:00')
+    "LQDA"  => timestamp('2026-06-10 09:00')
+    "COCO"  => timestamp('2026-06-10 09:00')
+    "3026"  => timestamp('2026-06-12 09:00')
+    "2327"  => timestamp('2026-06-12 09:00')
+    "6139"  => timestamp('2026-08-03 09:00')
+    "5536"  => timestamp('2026-06-12 09:00')
+    "3491"  => timestamp('2026-06-12 09:00')
+    "FLEX"  => timestamp('2026-06-15 09:00')
+    "DRAM"  => timestamp('2026-06-15 09:00')
+    "3583"  => timestamp('2026-06-30 09:00')
+    "8996"  => timestamp('2026-06-30 09:00')
+    "6187"  => timestamp('2026-08-03 09:00')
+    "3711"  => timestamp('2026-06-30 09:00')
+    "6515"  => timestamp('2026-06-30 09:00')
+    "7610"  => timestamp('2026-06-30 09:00')
+    "VRT"   => timestamp('2026-08-15 09:00')
+    "6510"  => timestamp('2026-09-06 09:00')
+    "5434"  => timestamp('2026-09-06 09:00')
+    "3624"  => timestamp('2026-09-10 09:00')
+    => defaultTime
+
+// === 2. Internal Moving Averages & Indicators ===
+ema20 = ta.ema(close, 20)
+ema60 = ta.ema(close, 60)
+atr = ta.atr(atrLen)
+donchian60 = nz(ta.lowest(low, 60)[1], ema60)
+trendUp = ema20 > ema60 and ema60[1] > ema60[6]
+
+// === 3. Rigid Support Identification ===
+avgVol = ta.sma(volume, pivotSide * 2)
+pl = ta.pivotlow(low, pivotSide, pivotSide)
+var array<float> supports = array.new_float(0)
+
+if not na(pl) and volume[pivotSide] > avgVol[pivotSide] * volFactor
+    isNew = true
+    if array.size(supports) > 0
+        for i = 0 to array.size(supports) - 1 by 1
+            existing = array.get(supports, i)
+            if math.abs(pl - existing) / existing < mergeThreshold
+                isNew := false
+                break
+    if isNew
+        array.push(supports, pl)
+        if array.size(supports) > 10
+            array.shift(supports)
+
+float nearestSup = na
+if array.size(supports) > 0
+    for i = 0 to array.size(supports) - 1 by 1
+        val = array.get(supports, i)
+        if val < close
+            if na(nearestSup) or val > nearestSup
+                nearestSup := val
+
+// === 4. Signal Trigger Conditions ===
+distToSup = na(nearestSup) ? 999.0 : (close - nearestSup) / nearestSup
+isStruct = not na(nearestSup) and distToSup < 0.08
+distToEma20 = math.abs(close - ema20) / ema20
+isTrend = not isStruct and trendUp and distToEma20 < 0.03 and close > ema60
+
+triggerStruct = isStruct and not (isStruct[1] == true)
+triggerTrend = isTrend and not (isTrend[1] == true)
+
+// === 5. Real-time LVIS 1x Equity & Benchmark Tracker ===
+benchClose = request.security(benchmarkTicker, timeframe.period, close)
+
+var float simCash = 1000000.0
+var float simShares = 0.0
+var int simStage = 0
+var float simSL = na
+var float simLastEntry = na
+
+if simShares > 0
+    simSL := math.max(nz(simSL, 0), nz(donchian60, 0))
+    if low <= simSL
+        exitP = open < simSL ? open : simSL
+        simCash := simCash + simShares * exitP * (1.0 - 0.005)
+        simShares := 0.0
+        simStage := 0
+        simSL := na
+        simLastEntry := na
+
+if simShares == 0
+    if triggerStruct or triggerTrend
+        size = simCash * riskPct
+        simShares := size / close
+        simCash := simCash - size * (1.0 + 0.005)
+        simStage := 1
+        simLastEntry := close
+        simSL := triggerStruct ? nearestSup - nz(atr) * 1.5 : ema60 - nz(atr) * 0.5
+else if simStage < 4
+    addMult = simStage == 1 ? 0.5 : 1.2
+    triggerL = simLastEntry + addMult * atr
+    if high >= triggerL
+        fillP = math.max(open, triggerL)
+        addSize = (simStage == 1 or simStage == 2) ? simCash * riskPct * 1.5 : simCash * riskPct * 1.0
+        simShares := simShares + addSize / fillP
+        simCash := simCash - addSize * (1.0 + 0.005)
+        simLastEntry := fillP
+        simStage := simStage + 1
+
+simEquity = simCash + simShares * close
+
+// === 6. Dynamic Leverage & Macro Circuit Breaker ===
+var float simPeak = na
+simPeak := na(simPeak) ? simEquity : math.max(simPeak, simEquity)
+simDD = (simPeak - simEquity) / simPeak
+
+var float benchPeak = na
+benchPeak := na(benchPeak) ? benchClose : math.max(benchPeak, benchClose)
+benchDD = (benchPeak - benchClose) / benchPeak
+
+float regimeIndicator = regimeMethod == 'Relative Drawdown' ? (simDD - benchDD) : ((simEquity - simEquity[regimeWindow]) / simEquity[regimeWindow] - (benchClose - benchClose[regimeWindow]) / benchClose[regimeWindow])
+
+var float regimeMult = 1.0
+var int lastSwitchBar = -9999
+
+if bar_index - lastSwitchBar >= coolingPeriod
+    if regimeMethod == 'Relative Drawdown'
+        if regimeMult == 2.0 and regimeIndicator > thresholdHigh
+            regimeMult := 1.0
+            lastSwitchBar := bar_index
+        else if regimeMult == 1.0 and regimeIndicator < thresholdLow
+            regimeMult := 2.0
+            lastSwitchBar := bar_index
+    else
+        if regimeMult == 1.0 and regimeIndicator > thresholdHigh
+            regimeMult := 2.0
+            lastSwitchBar := bar_index
+        else if regimeMult == 2.0 and regimeIndicator < thresholdLow
+            regimeMult := 1.0
+            lastSwitchBar := bar_index
+
+var float stratPeak = na
+stratPeak := na(stratPeak) ? strategy.equity : math.max(stratPeak, strategy.equity)
+stratDD = (stratPeak - strategy.equity) / stratPeak
+var bool cbActive = false
+if not cbActive
+    if stratDD >= 0.15
+        cbActive := true
+else
+    if stratDD <= 0.05
+        cbActive := false
+
+actualMult = cbActive ? 1.0 : regimeMult
+actualMultChanged = actualMult != actualMult[1]
+
+// === 7. Core Strategy & State Tracking ===
+var float currentSL = na
+var float startEquity = na 
+
+bool isTakeoverMode = runMode == 'Force Takeover'
+bool inTimeRange = time >= targetTime
+bool triggerTakeover = isTakeoverMode and time >= targetTime and time[1] < targetTime
+
+if strategy.position_size == 0 and strategy.position_size[1] > 0
+    currentSL := na
+    startEquity := na 
+
+// Option B Down-leveraging check
+if strategy.position_size > 0 and actualMultChanged and actualMult < actualMult[1]
+    strategy.close('🛡️ Takeover', qty_percent = 50, comment = "RESIZE (DOWN)")
+    strategy.close('🏛️ Struct Entry', qty_percent = 50, comment = "RESIZE (DOWN)")
+    strategy.close('🌊 Trend Entry', qty_percent = 50, comment = "RESIZE (DOWN)")
+    strategy.close('🔼 Scale In 1', qty_percent = 50, comment = "RESIZE (DOWN)")
+    strategy.close('🔼 Scale In 2', qty_percent = 50, comment = "RESIZE (DOWN)")
+    strategy.close('🔼 Scale In 3', qty_percent = 50, comment = "RESIZE (DOWN)")
+
+if strategy.position_size > 0
+    currentSL := math.max(nz(currentSL, 0), nz(donchian60, 0))
+    strategy.exit('🛑 Close All', stop = currentSL, alert_message = jsonExit)
+
+if strategy.position_size == 0
+    bool autoTriggerStruct = inTimeRange and triggerStruct
+    bool autoTriggerTrend = inTimeRange and triggerTrend
+
+    if triggerTakeover or autoTriggerStruct or autoTriggerTrend
+        float entryPrice = triggerTakeover and manualPrice > 0 ? manualPrice : close
+        startEquity := strategy.equity 
+        float entryQty = (startEquity * riskPct * actualMult) / entryPrice
+
+        if triggerTakeover
+            strategy.entry('🛡️ Takeover', strategy.long, qty = entryQty, alert_message = jsonTakeover)
+            currentSL := isStruct ? nearestSup - nz(atr) * 1.5 : ema60 - nz(atr) * 0.5
+        else if autoTriggerStruct
+            strategy.entry('🏛️ Struct Entry', strategy.long, qty = entryQty, alert_message = jsonStruct)
+            currentSL := nearestSup - nz(atr) * 1.5 
+        else if autoTriggerTrend
+            strategy.entry('🌊 Trend Entry', strategy.long, qty = entryQty, alert_message = jsonTrend)
+            currentSL := ema60 - nz(atr) * 0.5 
+
+        strategy.exit('🛑 Close All', stop = currentSL, alert_message = jsonExit)
+
+// ==============================================================================
+// ⭐️ 動態計算與高點觸發邏輯 (嚴格還原滿倉必為四倉之比例)
+// ==============================================================================
+float dynamicAddLine = na 
+if strategy.position_size > 0 and strategy.opentrades < 4
+    int currentStage = strategy.opentrades // 1=首倉已建, 2=已加碼1次, 3=已加碼2次
+    
+    // 加碼間距係數 (首次間距 0.5 ATR，後續 1.2 ATR)
+    float currentAddMult = currentStage == 1 ? 0.5 : 1.2
+    float lastFillPrice = strategy.opentrades.entry_price(currentStage - 1)
+    
+    // 即時計算動態加碼線
+    dynamicAddLine := lastFillPrice + currentAddMult * nz(atr) 
+
+    // 當價格高點突破動態加碼線
+    if high >= dynamicAddLine
+        // 嚴格定義四倉資金結構，總和比例恆等於 100% (對應 V5 的 20%, 30%, 30%, 20%)
+        float basePct = 0.0
+        if currentStage == 1
+            basePct := 0.30 // 第一次加碼分配 30%
+        else if currentStage == 2
+            basePct := 0.30 // 第二次加碼分配 30%
+        else if currentStage == 3
+            basePct := 0.20 // 第三次加碼分配 20%
+            
+        // 根據基礎 riskPct(0.2) 與動態槓桿 (actualMult) 按比例放大
+        float targetPct = basePct * (riskPct / 0.20) * actualMult
+        
+        float addQty = (startEquity * targetPct) / close 
+        
+        if addQty > 0
+            strategy.entry('🔼 Scale In ' + str.tostring(currentStage), strategy.long, qty = addQty, alert_message = jsonAdd)
+
+// === 8. Chart Visuals ===
+bool glow = true
+bool flipPulse = true
+bool fillZone = true
+color bullCol = color_spidey_blue 
+color bearCol = color_spidey_red  
+
+bool newPos = strategy.position_size > 0 and strategy.position_size[1] == 0
+int sinceFlip = ta.barssince(newPos)
+bool pulseOn = flipPulse and not na(sinceFlip) and sinceFlip <= 2
+
+int coreT  = pulseOn ? 35 : 72
+int midT   = pulseOn ? 65 : 84
+int outerT = pulseOn ? 85 : 93
+
+color slGlowCore = color.new(bearCol, coreT)
+color slGlowMid  = color.new(bearCol, midT)
+color slGlowOut  = color.new(bearCol, outerT)
+
+color pyrGlowCore = color.new(bullCol, coreT)
+color pyrGlowMid  = color.new(bullCol, midT)
+color pyrGlowOut  = color.new(bullCol, outerT)
+
+int railT = 80
+color bullRailC = fillZone ? color.new(bullCol, railT) : na
+color bearRailC = fillZone ? color.new(bearCol, railT) : na
+color bullEdgeC = fillZone ? color.new(bullCol, 100)   : na 
+color bearEdgeC = fillZone ? color.new(bearCol, 100)   : na 
+
+// Stop Loss plot
+plot(glow and strategy.position_size > 0 ? currentSL : na, "SL Glow Outer", slGlowOut, 14, plot.style_linebr)
+plot(glow and strategy.position_size > 0 ? currentSL : na, "SL Glow Mid",   slGlowMid,  8, plot.style_linebr)
+plot(glow and strategy.position_size > 0 ? currentSL : na, "SL Glow Core",  slGlowCore, 4, plot.style_linebr)
+slPlot = plot(strategy.position_size > 0 ? currentSL : na, "Dynamic Stop Loss", bearCol, 2, plot.style_linebr)
+
+// 動態加碼線視覺化
+plot(glow and strategy.position_size > 0 and strategy.opentrades < 4 ? dynamicAddLine : na, "Pyr Glow Outer", pyrGlowOut, 14, plot.style_linebr)
+plot(glow and strategy.position_size > 0 and strategy.opentrades < 4 ? dynamicAddLine : na, "Pyr Glow Mid",   pyrGlowMid,  8, plot.style_linebr)
+plot(glow and strategy.position_size > 0 and strategy.opentrades < 4 ? dynamicAddLine : na, "Pyr Glow Core",  pyrGlowCore, 4, plot.style_linebr)
+pyrPlot = plot(strategy.position_size > 0 and strategy.opentrades < 4 ? dynamicAddLine : na, "Pyramid Threshold", bullCol, 2, plot.style_linebr)
+
+// Gradient fills
+float avgEntryPrice = strategy.position_avg_price > 0 ? strategy.position_avg_price : na
+p_cost = plot(strategy.position_size > 0 ? avgEntryPrice : na, 'Avg Position Cost', display = display.none)
+p_close = plot(strategy.position_size > 0 ? close : na, 'Current Close', display = display.none)
+
+fill(p_cost, p_close, close, avgEntryPrice, 
+     close > avgEntryPrice ? bullEdgeC : na, 
+     close > avgEntryPrice ? bullRailC : na, "Profit Gradient")
+
+fill(p_cost, p_close, avgEntryPrice, close, 
+     strategy.position_size > 0 and close < avgEntryPrice ? bearRailC : na, 
+     strategy.position_size > 0 and close < avgEntryPrice ? bearEdgeC : na, "Loss Gradient")
+
+// === 9. Live V2 Dashboard Table ===
+var table dashTable = table.new(position.top_right, 2, 4, bgcolor=color.new(color_spidey_blue, 30), border_color=color_spidey_red, border_width=1)
+if barstate.islast
+    table.cell(dashTable, 0, 0, "LVIS V2 Panel", bgcolor=color_spidey_red, text_color=color.white, text_size=size.small)
+    table.cell(dashTable, 1, 0, syminfo.ticker, bgcolor=color_spidey_red, text_color=color.white, text_size=size.small)
+    
+    table.cell(dashTable, 0, 1, "Leverage Mult", text_color=color.white, text_size=size.small)
+    table.cell(dashTable, 1, 1, str.tostring(actualMult, "0.0") + "x", text_color=(actualMult > 1.0 ? color.green : color.orange), text_size=size.small)
+    
+    table.cell(dashTable, 0, 2, "Circuit Breaker", text_color=color.white, text_size=size.small)
+    table.cell(dashTable, 1, 2, cbActive ? "🔴 ACTIVE" : "🟢 INACTIVE", text_color=(cbActive ? color.red : color.green), text_size=size.small)
+    
+    table.cell(dashTable, 0, 3, "Account Drawdown", text_color=color.white, text_size=size.small)
+    table.cell(dashTable, 1, 3, str.tostring(stratDD * 100, "0.00") + "%", text_color=(stratDD >= 0.15 ? color.red : color.white), text_size=size.small)

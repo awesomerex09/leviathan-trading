@@ -1,0 +1,72 @@
+# Firestore Security Rules
+# 複製以下規則，貼到 Firebase Console -> Firestore Database -> Rules 標籤
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ============================================================
+    // 工具函式
+    // ============================================================
+
+    // 判斷是否已登入
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // 判斷是否為文件的擁有者
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // 判斷是否為管理員（Admin UID 白名單）
+    // 請將下方 'YOUR_ADMIN_UID' 替換成您的 Firebase UID
+    function isAdmin() {
+      return isSignedIn() && request.auth.uid in ['YOUR_ADMIN_UID'];
+    }
+
+    // ============================================================
+    // /users/{uid} - 用戶個人資料
+    // ============================================================
+    match /users/{uid} {
+      // 用戶只能讀自己的資料；Admin 可以讀所有人
+      allow read: if isOwner(uid) || isAdmin();
+
+      // 用戶只能更新特定欄位（isActive），不能改自己的 isPaid
+      // 寫入由後端伺服器完成（後端有 Admin 金鑰，擁有完整寫入權）
+      // 前端只能用 Bearer Token 呼叫我們的 FastAPI，由 FastAPI 寫入
+      allow write: if false; // 禁止前端直接寫入，必須透過後端 API
+
+      // 下單紀錄子集合
+      match /orders/{orderId} {
+        // 用戶只能讀自己的下單紀錄；Admin 可讀所有
+        allow read: if isOwner(uid) || isAdmin();
+        // 禁止前端直接寫入（由後端 order_logger.py 寫入）
+        allow write: if false;
+      }
+    }
+
+    // ============================================================
+    // /watchlist - 投資標的清單（只有 Admin 可以讀寫）
+    // ============================================================
+    match /watchlist/{docId} {
+      allow read: if isAdmin();
+      allow write: if false; // 只能透過後端 admin_api.py 寫入
+    }
+
+    // ============================================================
+    // /strategy - 量化策略腳本（只有 Admin 可以讀寫）
+    // ============================================================
+    match /strategy/{docId} {
+      allow read: if isAdmin();
+      allow write: if false; // 只能透過後端 admin_api.py 寫入
+    }
+
+    // ============================================================
+    // 預設：拒絕所有其他存取
+    // ============================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
