@@ -20,6 +20,6 @@ export const googleProvider = new GoogleAuthProvider();
 // 後端 API 基礎 URL（本地開發時指向 localhost）
 export const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
-// 您的 Firebase UID（用來判斷是否顯示 Admin 入口）
-// 部署前請改為真實的 Admin UID，或從環境變數讀取
-export const ADMIN_UID = import.meta.env.VITE_ADMIN_UID || "SET_YOUR_ADMIN_UID_HERE";
+// 您的 Firebase UID（管理員帳戶）
+// 登入後看到的是 Admin Panel，其他帳號看到的是 Client Dashboard
+export const ADMIN_UID = import.meta.env.VITE_ADMIN_UID || "Za2Y2KDjDDVLI7qkHCyhqdfnrMu1";
