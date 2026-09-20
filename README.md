@@ -198,10 +198,42 @@ SERVICE_ACCOUNT_PATH=serviceAccountKey.json
 
 - **量化模型名稱**：LVIS V2（Leviathan Intelligent Volume Strategy）
 - **訊號來源**：TradingView Webhook → FastAPI Server
+- **策略執行方式**：
+  - TradingView 只負責「偵測進出場訊號」並發送 Webhook
+  - **實際下單邏輯完全由 `core_trader.py` (Python) 控制**，非 PineScript
+  - 優點：0 延遲、0 依賴 TradingView 平台、可實現任意複雜邏輯
+  - Admin 可在後台線上修改 Python 策略腳本，儲存後下次 Webhook 觸發時生效
 - **多語言預設**：自動偵測瀏覽器語言，華人地區（zh-TW, zh-CN 等）預設中文
 - **訂閱費用**：$79 USD/月，透過 [Whop](https://whop.com/leviathan-6c7d/leviathan-signals/) 收款
-- **K 線圖表**：TradingView Lightweight Charts，疊加回測訊號點與實際成交點
-- **Admin 識別**：透過 Firebase UID 白名單（`Za2Y2KDjDDVLI7qkHCyhqdfnrMu1`）
+- **K 線圖表**：TradingView Lightweight Charts v5，疊加回測訊號點與實際成交點
+- **Admin 識別**：透過 Firebase UID 白名單
+- **Admin UID**：`Za2Y2KDjDDVLI7qkHCyhqdfnrMu1`
+- **Admin 面板設計**：直接讀寫 Firestore（不需要後端伺服器在線），Watchlist/策略腳本管理完全獨立
+- **Firestore Rules**：已發布，Admin UID 可讀寫所有文件；一般用戶只能讀自己的 orders/userDoc
+
+---
+
+## 🧪 Shioaji 模擬下單測試
+
+> ⚠️ **注意：Shioaji 模擬模式仍需要 API Key**，不能在沒有帳號的情況下測試
+
+```bash
+# 1. 在 server/.env 加入
+SHIOAJI_API_KEY=your_api_key
+SHIOAJI_SECRET_KEY=your_secret_key
+
+# 2. 安裝套件
+pip install shioaji
+
+# 3. 執行模擬測試（不會真正下單）
+python test_shioaji_simulation.py
+```
+
+模擬模式（`simulation=True`）特性：
+- ✅ 不需要 CA 憑證（.pfx 檔案）
+- ✅ 不會真正下單
+- ✅ 可測試完整下單流程、委託查詢
+- ❌ 仍需要有效的 API Key + Secret Key（需永豐金帳戶）
 
 ---
 
