@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# 後端伺服器程式碼（機密，只存 Mac mini 本機，不上傳 Public repo）
+server/
+v6.txt
+list.txt
+
+
+# Build outputs
+frontend/dist/
+frontend/.vite/
+
+# Secrets - NEVER commit these!
+server/serviceAccountKey.json
+.env
+.env.local
+.env.*.local
+*.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logbook.log
+
+# IDE
+.vscode/
+.idea/
+
+# Python venv
+venv/
+env/
+.venv/
