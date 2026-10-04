@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Users, ListChecks, Code2, Loader2, RefreshCw, Check, ChevronDown, ChevronUp } from 'lucide-react';
+import { Users, ListChecks, Code2, Activity, Loader2, RefreshCw, Check, ChevronDown, ChevronUp } from 'lucide-react';
 import {
   adminDbGetAllUsers,
   adminDbSetUserActive,
@@ -8,20 +8,44 @@ import {
   adminDbUpdateWatchlist,
   adminDbGetStrategy,
   adminDbUpdateStrategy,
+  adminDbGetSignals,
+  adminDbGetSimOrders,
 } from '../adminDb';
+
+// 訊號類型對應樣式
+const SIGNAL_STYLES = {
+  STRUCT_ENTRY:  { emoji: '🏛️', color: '#1d4ed8', label: '結構入場' },
+  TREND_ENTRY:   { emoji: '🌊', color: '#0891b2', label: '趨勢入場' },
+  SCALE_IN_1:    { emoji: '🔼', color: '#059669', label: '加碼 1' },
+  SCALE_IN_2:    { emoji: '🔼', color: '#059669', label: '加碼 2' },
+  SCALE_IN_3:    { emoji: '🔼', color: '#059669', label: '加碼 3' },
+  EXIT:          { emoji: '🛑', color: '#dc2626', label: '出場' },
+  TAKEOVER:      { emoji: '🛡️', color: '#7c3aed', label: '接管' },
+};
 
 const AdminDashboard = ({ user, t }) => {
   const [tab, setTab] = useState('users');
+
+  // Users
   const [users, setUsers] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [expandedUser, setExpandedUser] = useState(null);
+
+  // Watchlist
   const [watchlist, setWatchlist] = useState([]);
   const [watchlistInput, setWatchlistInput] = useState('');
   const [watchlistLoading, setWatchlistLoading] = useState(false);
   const [watchlistStatus, setWatchlistStatus] = useState('');
+
+  // Strategy
   const [script, setScript] = useState('');
   const [scriptLoading, setScriptLoading] = useState(false);
   const [scriptStatus, setScriptStatus] = useState('');
+
+  // Signals
+  const [signals, setSignals] = useState([]);
+  const [simOrders, setSimOrders] = useState([]);
+  const [signalsLoading, setSignalsLoading] = useState(false);
 
   const fetchUsers = useCallback(async () => {
     setUsersLoading(true);
@@ -43,11 +67,24 @@ const AdminDashboard = ({ user, t }) => {
     catch (e) { console.error(e); } finally { setScriptLoading(false); }
   }, []);
 
+  const fetchSignals = useCallback(async () => {
+    setSignalsLoading(true);
+    try {
+      const [sigs, orders] = await Promise.all([
+        adminDbGetSignals(50),
+        adminDbGetSimOrders(20),
+      ]);
+      setSignals(sigs);
+      setSimOrders(orders);
+    } catch (e) { console.error(e); } finally { setSignalsLoading(false); }
+  }, []);
+
   useEffect(() => {
     if (tab === 'users') fetchUsers();
     if (tab === 'watchlist') fetchWatchlist();
     if (tab === 'strategy') fetchStrategy();
-  }, [tab, fetchUsers, fetchWatchlist, fetchStrategy]);
+    if (tab === 'signals') fetchSignals();
+  }, [tab, fetchUsers, fetchWatchlist, fetchStrategy, fetchSignals]);
 
   const toggleUserActive = async (uid, current) => {
     try { await adminDbSetUserActive(uid, !current); fetchUsers(); } catch (e) { console.error(e); }
@@ -70,6 +107,11 @@ const AdminDashboard = ({ user, t }) => {
     catch (e) { console.error(e); setScriptStatus('error'); }
   };
 
+  const fmtTime = (ts) => {
+    if (!ts) return '—';
+    try { return new Date(ts).toLocaleString('zh-TW'); } catch { return ts; }
+  };
+
   return (
     <div className="dashboard-wrapper">
       <div className="admin-header">
@@ -86,6 +128,9 @@ const AdminDashboard = ({ user, t }) => {
         </button>
         <button className={tab === 'strategy' ? 'tab active' : 'tab'} onClick={() => setTab('strategy')}>
           <Code2 size={16} /> {t.admin_tab_strategy}
+        </button>
+        <button className={tab === 'signals' ? 'tab active' : 'tab'} onClick={() => setTab('signals')}>
+          <Activity size={16} /> 訊號紀錄
         </button>
       </div>
 
@@ -194,7 +239,7 @@ const AdminDashboard = ({ user, t }) => {
                 <textarea className="form-control code-editor" rows={24}
                   value={watchlistInput}
                   onChange={e => { setWatchlistInput(e.target.value); setWatchlistStatus(''); }}
-                  placeholder="每行一個代碼&#10;例如：&#10;TXF&#10;NVDA&#10;2330"
+                  placeholder={"每行一個代碼\n例如：\nTXF\nNVDA\n2330"}
                   style={{ fontFamily: 'monospace', fontSize: '0.9rem', lineHeight: '1.8' }} />
               </div>
               <div>
@@ -229,8 +274,8 @@ const AdminDashboard = ({ user, t }) => {
               <p>
                 此處儲存的腳本由後端 Python 伺服器（Mac mini）直接解析並執行下單邏輯，
                 <strong>不透過 TradingView PineScript</strong>。
-                TradingView 只負責產生進出場訊號（Webhook），實際下單邏輯完全由本系統的
-                <code>core_trader.py</code> 控制，確保 0 延遲、0 依賴外部平台。
+                Python 自行計算所有指標（EMA/ATR/Donchian/PivotLow），
+                每根 K 棒收盤後才判斷訊號，確保與圖表 100% 一致、0 repainting。
               </p>
             </div>
             {scriptStatus === 'success' && <p style={{ color: '#16a34a', marginBottom: '1rem' }}>{t.admin_script_success}</p>}
@@ -240,6 +285,118 @@ const AdminDashboard = ({ user, t }) => {
               onChange={e => { setScript(e.target.value); setScriptStatus(''); }}
               placeholder={t.admin_strategy_placeholder}
               style={{ fontFamily: '"Fira Code", monospace', fontSize: '0.82rem', lineHeight: '1.6' }} />
+          </div>
+        )}
+
+        {/* ── Signals 訊號紀錄 ── */}
+        {tab === 'signals' && (
+          <div>
+            <div className="section-header">
+              <div>
+                <h3>⚡ LVIS V2 訊號紀錄</h3>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
+                  由後端 Python 策略引擎產生，即時同步至此
+                </p>
+              </div>
+              <button className="btn btn-outline" onClick={fetchSignals} disabled={signalsLoading}>
+                <RefreshCw size={16} /> 重新整理
+              </button>
+            </div>
+
+            {signalsLoading
+              ? <div style={{ textAlign: 'center', padding: '3rem' }}><Loader2 size={32} className="animate-spin" /></div>
+              : (
+                <>
+                  {/* 模擬委託 */}
+                  {simOrders.length > 0 && (
+                    <div style={{ marginBottom: '2rem' }}>
+                      <h4 style={{ marginBottom: '1rem', fontSize: '1rem' }}>🔬 模擬委託紀錄（Shioaji sim_orders）</h4>
+                      <div className="orders-table">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>時間</th><th>標的</th><th>類型</th><th>價格</th><th>數量</th><th>狀態</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {simOrders.map(o => (
+                              <tr key={o.id}>
+                                <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{fmtTime(o.timestamp)}</td>
+                                <td><strong>{o.symbol}</strong></td>
+                                <td><span className="badge badge-buy" style={{ fontSize: '0.75rem' }}>{o.type}</span></td>
+                                <td>{o.price?.toLocaleString()}</td>
+                                <td>{o.qty}</td>
+                                <td>
+                                  <span className="badge" style={{
+                                    background: o.simulation ? '#fef3c7' : '#d1fae5',
+                                    color: o.simulation ? '#92400e' : '#065f46',
+                                    fontSize: '0.75rem',
+                                  }}>
+                                    {o.simulation ? '模擬' : '實單'}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 策略訊號 */}
+                  <h4 style={{ marginBottom: '1rem', fontSize: '1rem' }}>
+                    📊 策略訊號（最新 {signals.length} 筆）
+                  </h4>
+                  {signals.length === 0
+                    ? (
+                      <div className="empty-state">
+                        <p>尚無訊號紀錄</p>
+                        <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                          執行 <code>python run_simulation.py</code> 後，訊號會自動出現在這裡
+                        </p>
+                      </div>
+                    )
+                    : (
+                      <div className="orders-table">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>時間</th><th>標的</th><th>訊號類型</th><th>進場價</th><th>數量</th><th>止損</th><th>備註</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {signals.map(sig => {
+                              const style = SIGNAL_STYLES[sig.type] || { emoji: '📊', color: '#666', label: sig.type };
+                              return (
+                                <tr key={sig.id}>
+                                  <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{fmtTime(sig.timestamp)}</td>
+                                  <td><strong style={{ fontFamily: 'monospace' }}>{sig.symbol}</strong></td>
+                                  <td>
+                                    <span className="badge" style={{
+                                      background: style.color + '18',
+                                      color: style.color,
+                                      border: `1px solid ${style.color}40`,
+                                      fontSize: '0.78rem',
+                                      padding: '0.2rem 0.6rem',
+                                    }}>
+                                      {style.emoji} {style.label}
+                                    </span>
+                                  </td>
+                                  <td style={{ fontFamily: 'monospace' }}>{sig.price?.toLocaleString()}</td>
+                                  <td style={{ fontFamily: 'monospace' }}>{sig.qty?.toFixed ? sig.qty.toFixed(4) : sig.qty}</td>
+                                  <td style={{ fontFamily: 'monospace', color: '#dc2626' }}>{sig.stop_loss?.toLocaleString()}</td>
+                                  <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sig.comment || sig.source || '—'}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )
+                  }
+                </>
+              )
+            }
           </div>
         )}
 

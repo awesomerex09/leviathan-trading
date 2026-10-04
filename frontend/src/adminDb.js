@@ -1,11 +1,13 @@
 /**
  * adminDb.js
- * Admin 直接寫入 Firestore（不需要後端伺服器）
- * 用途：Watchlist 和 Strategy 的讀寫，Admin 已有 Firebase 身份，可以直接操作
- * 這樣不管後端伺服器有沒有啟動，Admin 功能都正常
+ * Admin 直接讀寫 Firestore（不需要後端伺服器）
+ * Admin 用 Firebase 身份直接操作所有集合
  */
 import { db, auth, ADMIN_UID } from './firebase';
-import { doc, getDoc, setDoc, collection, getDocs, serverTimestamp } from 'firebase/firestore';
+import {
+  doc, getDoc, setDoc, collection, getDocs,
+  serverTimestamp, query, orderBy, limit,
+} from 'firebase/firestore';
 
 function assertAdmin() {
   const user = auth.currentUser;
@@ -50,7 +52,7 @@ export async function adminDbUpdateStrategy(script) {
   return { success: true };
 }
 
-// ── Users (summary, fallback when backend offline) ─────────
+// ── Users ──────────────────────────────────────────────────
 
 export async function adminDbGetAllUsers() {
   assertAdmin();
@@ -68,4 +70,45 @@ export async function adminDbSetUserPaid(uid, isPaid) {
   assertAdmin();
   await setDoc(doc(db, 'users', uid), { isPaid }, { merge: true });
   return { success: true };
+}
+
+// ── Signals（LVIS 策略訊號紀錄）──────────────────────────
+
+export async function adminDbGetSignals(limitCount = 50) {
+  assertAdmin();
+  try {
+    const q = query(
+      collection(db, 'signals'),
+      orderBy('timestamp', 'desc'),
+      limit(limitCount),
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  } catch {
+    // 若 index 未建立，fallback 不排序
+    const snap = await getDocs(collection(db, 'signals'));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''))
+      .slice(0, limitCount);
+  }
+}
+
+// ── Sim Orders（模擬委託紀錄）────────────────────────────
+
+export async function adminDbGetSimOrders(limitCount = 50) {
+  assertAdmin();
+  try {
+    const q = query(
+      collection(db, 'sim_orders'),
+      orderBy('timestamp', 'desc'),
+      limit(limitCount),
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  } catch {
+    const snap = await getDocs(collection(db, 'sim_orders'));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''))
+      .slice(0, limitCount);
+  }
 }
