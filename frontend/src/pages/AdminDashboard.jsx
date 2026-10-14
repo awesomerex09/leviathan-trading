@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Users, ListChecks, Code2, Activity, Loader2, RefreshCw, Check, ChevronDown, ChevronUp } from 'lucide-react';
+import { Users, ListChecks, SlidersHorizontal, Activity, Loader2, RefreshCw, Check, ChevronDown, ChevronUp, Info } from 'lucide-react';
 import {
   adminDbGetAllUsers,
   adminDbSetUserActive,
   adminDbSetUserPaid,
   adminDbGetWatchlist,
   adminDbUpdateWatchlist,
-  adminDbGetStrategy,
-  adminDbUpdateStrategy,
+  adminDbGetStrategyParams,
+  adminDbUpdateStrategyParams,
   adminDbGetSignals,
   adminDbGetSimOrders,
+  STRATEGY_PARAM_SCHEMA,
 } from '../adminDb';
+
 
 // 訊號類型對應樣式
 const SIGNAL_STYLES = {
@@ -37,10 +39,11 @@ const AdminDashboard = ({ user, t }) => {
   const [watchlistLoading, setWatchlistLoading] = useState(false);
   const [watchlistStatus, setWatchlistStatus] = useState('');
 
-  // Strategy
-  const [script, setScript] = useState('');
-  const [scriptLoading, setScriptLoading] = useState(false);
-  const [scriptStatus, setScriptStatus] = useState('');
+  // Strategy Params
+  const [params, setParams] = useState({});
+  const [paramsLoading, setParamsLoading] = useState(false);
+  const [paramsStatus, setParamsStatus] = useState('');
+  const [tooltip, setTooltip] = useState(null);
 
   // Signals
   const [signals, setSignals] = useState([]);
@@ -61,10 +64,10 @@ const AdminDashboard = ({ user, t }) => {
     } catch (e) { console.error(e); } finally { setWatchlistLoading(false); }
   }, []);
 
-  const fetchStrategy = useCallback(async () => {
-    setScriptLoading(true);
-    try { const data = await adminDbGetStrategy(); setScript(data.script || ''); }
-    catch (e) { console.error(e); } finally { setScriptLoading(false); }
+  const fetchParams = useCallback(async () => {
+    setParamsLoading(true);
+    try { setParams(await adminDbGetStrategyParams()); }
+    catch (e) { console.error(e); } finally { setParamsLoading(false); }
   }, []);
 
   const fetchSignals = useCallback(async () => {
@@ -82,9 +85,9 @@ const AdminDashboard = ({ user, t }) => {
   useEffect(() => {
     if (tab === 'users') fetchUsers();
     if (tab === 'watchlist') fetchWatchlist();
-    if (tab === 'strategy') fetchStrategy();
+    if (tab === 'strategy') fetchParams();
     if (tab === 'signals') fetchSignals();
-  }, [tab, fetchUsers, fetchWatchlist, fetchStrategy, fetchSignals]);
+  }, [tab, fetchUsers, fetchWatchlist, fetchParams, fetchSignals]);
 
   const toggleUserActive = async (uid, current) => {
     try { await adminDbSetUserActive(uid, !current); fetchUsers(); } catch (e) { console.error(e); }
@@ -101,10 +104,27 @@ const AdminDashboard = ({ user, t }) => {
     catch (e) { console.error(e); setWatchlistStatus('error'); }
   };
 
-  const saveStrategy = async () => {
-    setScriptStatus('saving');
-    try { await adminDbUpdateStrategy(script); setScriptStatus('success'); }
-    catch (e) { console.error(e); setScriptStatus('error'); }
+  const saveParams = async () => {
+    setParamsStatus('saving');
+    try {
+      await adminDbUpdateStrategyParams(params);
+      setParamsStatus('success');
+      setTimeout(() => setParamsStatus(''), 3000);
+    } catch (e) { console.error(e); setParamsStatus('error'); }
+  };
+
+  const resetParams = () => {
+    const defaults = Object.fromEntries(STRATEGY_PARAM_SCHEMA.map(p => [p.key, p.default]));
+    setParams(defaults);
+    setParamsStatus('');
+  };
+
+  const updateParam = (key, rawVal, schema) => {
+    let v = schema.type === 'int' ? parseInt(rawVal, 10) : parseFloat(rawVal);
+    if (isNaN(v)) return;
+    v = Math.min(schema.max, Math.max(schema.min, v));
+    setParams(prev => ({ ...prev, [key]: v }));
+    setParamsStatus('');
   };
 
   const fmtTime = (ts) => {
@@ -127,7 +147,7 @@ const AdminDashboard = ({ user, t }) => {
           <ListChecks size={16} /> {t.admin_tab_watchlist}
         </button>
         <button className={tab === 'strategy' ? 'tab active' : 'tab'} onClick={() => setTab('strategy')}>
-          <Code2 size={16} /> {t.admin_tab_strategy}
+          <SlidersHorizontal size={16} /> 策略參數
         </button>
         <button className={tab === 'signals' ? 'tab active' : 'tab'} onClick={() => setTab('signals')}>
           <Activity size={16} /> 訊號紀錄
@@ -254,37 +274,96 @@ const AdminDashboard = ({ user, t }) => {
           </div>
         )}
 
-        {/* ── Strategy ── */}
+        {/* ── Strategy Params ── */}
         {tab === 'strategy' && (
           <div>
             <div className="section-header">
               <div>
-                <h3>{t.admin_strategy_title}</h3>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.25rem' }}>{t.admin_strategy_sub}</p>
+                <h3>⚙️ LVIS V2 策略參數</h3>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
+                  修改後點儲存，下次 Python 後端執行時自動生效・<strong style={{ color: '#16a34a' }}>即時修改，不需重啟伺服器</strong>
+                </p>
               </div>
-              <button className="btn btn-black" onClick={saveStrategy} disabled={scriptLoading || scriptStatus === 'saving'}>
-                {scriptStatus === 'saving'
-                  ? <Loader2 size={16} className="animate-spin" />
-                  : scriptStatus === 'success' ? <Check size={16} />
-                    : t.admin_save_script}
-              </button>
+              <div style={{ display: 'flex', gap: '0.75rem' }}>
+                <button className="btn btn-outline" onClick={resetParams}>還原預設</button>
+                <button className="btn btn-black" onClick={saveParams} disabled={paramsLoading || paramsStatus === 'saving'}>
+                  {paramsStatus === 'saving' ? <Loader2 size={16} className="animate-spin" />
+                    : paramsStatus === 'success' ? <><Check size={16} /> 已儲存</>
+                    : '儲存參數'}
+                </button>
+              </div>
             </div>
-            <div className="strategy-notice">
-              <strong>📌 策略腳本說明</strong>
-              <p>
-                此處儲存的腳本由後端 Python 伺服器（Mac mini）直接解析並執行下單邏輯，
-                <strong>不透過 TradingView PineScript</strong>。
-                Python 自行計算所有指標（EMA/ATR/Donchian/PivotLow），
-                每根 K 棒收盤後才判斷訊號，確保與圖表 100% 一致、0 repainting。
-              </p>
-            </div>
-            {scriptStatus === 'success' && <p style={{ color: '#16a34a', marginBottom: '1rem' }}>{t.admin_script_success}</p>}
-            {scriptStatus === 'error' && <p style={{ color: '#e11d48', marginBottom: '1rem' }}>{t.admin_script_error}</p>}
-            <textarea className="form-control code-editor" rows={32}
-              value={script}
-              onChange={e => { setScript(e.target.value); setScriptStatus(''); }}
-              placeholder={t.admin_strategy_placeholder}
-              style={{ fontFamily: '"Fira Code", monospace', fontSize: '0.82rem', lineHeight: '1.6' }} />
+
+            {paramsStatus === 'error' && <p style={{ color: '#e11d48', marginBottom: '1rem' }}>儲存失敗，請重試</p>}
+
+            {paramsLoading
+              ? <div style={{ textAlign: 'center', padding: '3rem' }}><Loader2 size={32} className="animate-spin" /></div>
+              : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '1.25rem', marginTop: '0.5rem' }}>
+                  {STRATEGY_PARAM_SCHEMA.map(schema => {
+                    const val = params[schema.key] ?? schema.default;
+                    return (
+                      <div key={schema.key} style={{
+                        background: 'var(--card-bg)',
+                        border: '1px solid var(--border)',
+                        borderRadius: '0.75rem',
+                        padding: '1.1rem 1.25rem',
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.6rem' }}>
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: '0.92rem' }}>{schema.label}</div>
+                            <code style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{schema.key}</code>
+                          </div>
+                          <div style={{ position: 'relative' }}
+                            onMouseEnter={() => setTooltip(schema.key)}
+                            onMouseLeave={() => setTooltip(null)}>
+                            <Info size={15} style={{ color: 'var(--text-muted)', cursor: 'pointer' }} />
+                            {tooltip === schema.key && (
+                              <div style={{
+                                position: 'absolute', right: 0, top: '1.5rem', zIndex: 10,
+                                background: '#1e293b', color: '#f1f5f9', borderRadius: '0.5rem',
+                                padding: '0.5rem 0.75rem', fontSize: '0.8rem', width: '200px',
+                                boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+                              }}>{schema.desc}</div>
+                            )}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <input
+                            type="range"
+                            min={schema.min} max={schema.max}
+                            step={schema.type === 'float' ? (schema.max - schema.min) / 100 : 1}
+                            value={val}
+                            onChange={e => updateParam(schema.key, e.target.value, schema)}
+                            style={{ flex: 1, accentColor: 'var(--accent)' }}
+                          />
+                          <input
+                            type="number"
+                            min={schema.min} max={schema.max}
+                            step={schema.type === 'float' ? 0.001 : 1}
+                            value={val}
+                            onChange={e => updateParam(schema.key, e.target.value, schema)}
+                            style={{
+                              width: '80px', textAlign: 'right', fontFamily: 'monospace',
+                              fontSize: '0.9rem', fontWeight: 600,
+                              background: 'transparent', border: '1px solid var(--border)',
+                              borderRadius: '0.4rem', padding: '0.25rem 0.5rem', color: 'inherit',
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                          <span>{schema.min}</span>
+                          <span style={{ color: val !== schema.default ? '#f59e0b' : 'var(--text-muted)' }}>
+                            {val !== schema.default ? '已修改（預設: ' + schema.default + '）' : '預設值'}
+                          </span>
+                          <span>{schema.max}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+            }
           </div>
         )}
 
