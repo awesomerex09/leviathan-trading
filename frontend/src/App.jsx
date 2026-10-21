@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { auth, ADMIN_UID } from './firebase';
+import { auth, db, ADMIN_UID } from './firebase';
 import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from 'firebase/auth';
+import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 import { Loader2, LogOut, BarChart2, ShieldCheck, TrendingUp, Globe } from 'lucide-react';
 import ClientDashboard from './pages/ClientDashboard';
 import AdminDashboard from './pages/AdminDashboard';
@@ -15,6 +16,7 @@ function App() {
   const [view, setView] = useState('home');
   const [loginError, setLoginError] = useState('');
   const [lang, setLang] = useState(detectLanguage);
+  const [isPaid, setIsPaid] = useState(false);
   const t = getTranslations(lang);
 
   const toggleLang = () => {
@@ -24,9 +26,36 @@ function App() {
   };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       setLoading(false);
+
+      // 新用戶首次登入時自動建立 Firestore users/{uid} 文件
+      // Admin 後台才能看到此用戶（使用 merge:true 不覆蓋現有資料）
+      if (currentUser && currentUser.uid !== ADMIN_UID) {
+        try {
+          await setDoc(
+            doc(db, 'users', currentUser.uid),
+            {
+              email: currentUser.email,
+              displayName: currentUser.displayName || '',
+              photoURL: currentUser.photoURL || '',
+              createdAt: serverTimestamp(),
+              lastLogin: serverTimestamp(),
+              isActive: false,
+              isPaid: false,
+            },
+            { merge: true }
+          );
+          await setDoc(
+            doc(db, 'users', currentUser.uid),
+            { lastLogin: serverTimestamp() },
+            { merge: true }
+          );
+        } catch (e) {
+          console.warn('User doc init:', e.message);
+        }
+      }
     });
     return () => unsubscribe();
   }, []);
@@ -66,6 +95,16 @@ function App() {
     );
   }
 
+  // ── Listen isPaid from Firestore (real-time) ──
+  useEffect(() => {
+    if (!user || user.uid === ADMIN_UID) return;
+    const ref = doc(db, 'users', user.uid);
+    const unsub = onSnapshot(ref, snap => {
+      if (snap.exists()) setIsPaid(!!snap.data().isPaid);
+    }, () => {});
+    return unsub;
+  }, [user]);
+
   // ── Logged in ──
   if (user) {
     const isAdmin = user.uid === ADMIN_UID;
@@ -77,8 +116,9 @@ function App() {
               <img src={logoUrl} alt="Leviathan Logo" />
               LEVIATHAN<sup style={{ fontSize: '0.6em', marginLeft: '2px' }}>®</sup>
             </div>
-            {isAdmin && (
-              <span className="admin-badge">ADMIN</span>
+            {isAdmin && (<span className="admin-badge">ADMIN</span>)}
+            {!isAdmin && isPaid && (
+              <span style={{ fontSize: '0.7rem', background: 'rgba(34,197,94,0.15)', color: '#22c55e', padding: '0.15rem 0.5rem', borderRadius: '999px', fontWeight: 600 }}>PRO</span>
             )}
           </div>
           <div className="nav-actions">
@@ -95,7 +135,7 @@ function App() {
         <main className="main-content">
           {isAdmin
             ? <AdminDashboard user={user} t={t} />
-            : <ClientDashboard user={user} t={t} />
+            : <ClientDashboard user={user} t={t} isPaid={isPaid} />
           }
         </main>
       </div>
