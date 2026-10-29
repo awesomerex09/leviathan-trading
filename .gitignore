@@ -23,6 +23,12 @@ server/serviceAccountKey.json
 .env.local
 .env.*.local
 *.env
+*.pfx
+*.pem
+*.key
+Sinopac.pfx
+firebase.json
+.firebaserc
 
 # OS files
 .DS_Store

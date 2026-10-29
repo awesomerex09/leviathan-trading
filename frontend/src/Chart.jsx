@@ -1,14 +1,15 @@
 import React, { useEffect, useRef } from 'react';
-import { createChart, CandlestickSeries } from 'lightweight-charts';
+import { createChart, CandlestickSeries, createSeriesMarkers } from 'lightweight-charts';
 
 /**
  * Chart.jsx - TradingView Lightweight Charts v5 K線圖
- * v5 breaking change: 使用 chart.addSeries(CandlestickSeries, options) 取代 addCandlestickSeries()
+ * v5: 使用 chart.addSeries(CandlestickSeries, options) 與 createSeriesMarkers(series, markers)
  */
 const Chart = ({ data = [], markers = [], title }) => {
   const chartContainerRef = useRef();
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
+  const markersPluginRef = useRef(null);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -43,10 +44,16 @@ const Chart = ({ data = [], markers = [], title }) => {
 
     if (data && data.length > 0) {
       candlestickSeries.setData(data);
+      chart.timeScale().fitContent();
     }
 
     if (markers && markers.length > 0) {
-      candlestickSeries.setMarkers(markers);
+      const sorted = [...markers].sort((a, b) => a.time - b.time);
+      try {
+        markersPluginRef.current = createSeriesMarkers(candlestickSeries, sorted);
+      } catch (e) {
+        console.warn('createSeriesMarkers failed:', e);
+      }
     }
 
     const handleResize = () => {
@@ -61,6 +68,7 @@ const Chart = ({ data = [], markers = [], title }) => {
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      markersPluginRef.current = null;
       if (chartRef.current) {
         chartRef.current.remove();
         chartRef.current = null;
@@ -72,12 +80,29 @@ const Chart = ({ data = [], markers = [], title }) => {
   useEffect(() => {
     if (seriesRef.current && data && data.length > 0) {
       seriesRef.current.setData(data);
+      if (chartRef.current) {
+        chartRef.current.timeScale().fitContent();
+      }
     }
   }, [data]);
 
   useEffect(() => {
-    if (seriesRef.current && markers) {
-      seriesRef.current.setMarkers(markers);
+    if (!seriesRef.current) return;
+    const sorted = (markers || []).slice().sort((a, b) => a.time - b.time);
+    if (!markersPluginRef.current) {
+      if (sorted.length > 0) {
+        try {
+          markersPluginRef.current = createSeriesMarkers(seriesRef.current, sorted);
+        } catch (e) {
+          console.warn('createSeriesMarkers failed:', e);
+        }
+      }
+    } else {
+      try {
+        markersPluginRef.current.setMarkers(sorted);
+      } catch (e) {
+        console.warn('setMarkers failed:', e);
+      }
     }
   }, [markers]);
 

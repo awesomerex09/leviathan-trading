@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { db } from "../firebase";
 import {
   collection, query, orderBy, limit, onSnapshot,
@@ -15,7 +15,8 @@ const INIT_CAP = 875_000;
 export default function ClientDashboard({ user, t, isPaid }) {
   const [tab, setTab] = useState("portfolio");
 
-  // Portfolio
+  // Portfolio & Watchlist
+  const [watchlist, setWatchlist] = useState([]);
   const [signals, setSignals]     = useState([]);
   const [simOrders, setSimOrders] = useState([]);
   const [portfolio, setPortfolio] = useState(null);
@@ -39,23 +40,34 @@ export default function ClientDashboard({ user, t, isPaid }) {
     }, () => setOrdersLoading(false));
   }, [user.uid]);
 
+  // Watchlist listener (all signed-in users can read)
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "watchlist", "config"), snap => {
+      if (snap.exists() && snap.data().symbols) {
+        setWatchlist(snap.data().symbols);
+      }
+    }, err => console.warn("Watchlist snapshot error:", err));
+    return unsub;
+  }, []);
+
   // Paid-only data
   useEffect(() => {
     if (!isPaid) return;
     const qSig = query(collection(db, "signals"),   orderBy("timestamp", "desc"), limit(500));
     const qOrd = query(collection(db, "sim_orders"), orderBy("timestamp", "desc"), limit(500));
-    const u1 = onSnapshot(qSig, snap => setSignals(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => {});
-    const u2 = onSnapshot(qOrd, snap => setSimOrders(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => {});
+    const u1 = onSnapshot(qSig, snap => setSignals(snap.docs.map(d => ({ id: d.id, ...d.data() }))), err => console.warn("Signals error:", err));
+    const u2 = onSnapshot(qOrd, snap => setSimOrders(snap.docs.map(d => ({ id: d.id, ...d.data() }))), err => console.warn("Sim orders error:", err));
     return () => { u1(); u2(); };
   }, [isPaid]);
 
-  // Compute portfolio
+  // Compute portfolio: combines executed sim_orders + active model signals
   useEffect(() => {
     if (!simOrders.length && !signals.length) return;
     let cash = INIT_CAP;
     const positions = {};
     let realPnl = 0;
 
+    // 1. Process simOrders if present
     const sorted = [...simOrders].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
     for (const o of sorted) {
       const { symbol, type, price, qty } = o;
@@ -79,10 +91,37 @@ export default function ClientDashboard({ user, t, isPaid }) {
       }
     }
 
-    const latestPrice = {};
+    // 2. Incorporate active positions from signals (for symbols not tracked in simOrders)
+    const sigsBySym = {};
     for (const s of signals) {
-      if (!latestPrice[s.symbol] || new Date(s.timestamp) > new Date(latestPrice[s.symbol].timestamp))
-        latestPrice[s.symbol] = s;
+      if (!s.symbol) continue;
+      if (!sigsBySym[s.symbol]) sigsBySym[s.symbol] = [];
+      sigsBySym[s.symbol].push(s);
+    }
+
+    const latestPrice = {};
+    for (const [sym, sigList] of Object.entries(sigsBySym)) {
+      sigList.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+      const last = sigList[sigList.length - 1];
+      latestPrice[sym] = last;
+
+      // If symbol is not already tracked in simOrders
+      if (!positions[sym]) {
+        const isEntry = last.type && (last.type.includes("ENTRY") || last.type.includes("SCALE"));
+        if (isEntry && last.price) {
+          // Default sizing: 3,500 base unit (scale-in is 1.5x = 5,250)
+          const baseUnit = 3500;
+          const mult = last.type.includes("SCALE_IN_1") || last.type.includes("SCALE_IN_2") ? 1.5 : 1;
+          const allocated = baseUnit * mult;
+          const qty = allocated / last.price;
+          positions[sym] = {
+            qty,
+            totalCost: allocated,
+            fromSignal: true,
+          };
+          cash -= allocated;
+        }
+      }
     }
 
     let unrealPnl = 0;
@@ -115,23 +154,15 @@ export default function ClientDashboard({ user, t, isPaid }) {
     setShowPicker(false);
   }, [signals]);
 
-  // All unique symbols from signals
-  const allSyms = [...new Set(signals.map(s => s.symbol))].sort();
+  // All unique symbols from watchlist + signals
+  const allSyms = useMemo(() => {
+    return [...new Set([...watchlist, ...signals.map(s => s.symbol)])].filter(Boolean).sort();
+  }, [watchlist, signals]);
 
-  // Chart markers
-  const markers = symSignals.map(s => {
-    const isEntry = s.type?.includes("ENTRY") || s.type?.includes("SCALE");
-    return {
-      time: Math.floor(new Date(s.timestamp).getTime() / 1000),
-      position: isEntry ? "belowBar" : "aboveBar",
-      color: isEntry ? "#22c55e" : "#ef4444",
-      shape: isEntry ? "arrowUp" : "arrowDown",
-      text: `${s.type} @${s.price?.toFixed(2)}`,
-    };
-  });
-
-  // Synthetic OHLC from signal prices
-  const chartData = buildOHLC(symSignals);
+  // Synthetic OHLC + aligned markers from signal prices
+  const { chartData, markers } = useMemo(() => {
+    return generateCandlesAndMarkers(symSignals);
+  }, [symSignals]);
 
   const fmt    = n => n != null ? Math.round(n).toLocaleString("zh-TW") : "-";
   const fmtPct = n => n != null ? `${n >= 0 ? "+" : ""}${n.toFixed(2)}%` : "-";
@@ -283,7 +314,15 @@ export default function ClientDashboard({ user, t, isPaid }) {
                 chartLoading
                   ? <div style={{ textAlign: "center", padding: "3rem" }}><Loader2 size={32} className="animate-spin" /></div>
                   : symSignals.length === 0
-                    ? <div className="empty-state">此標的暫無訊號紀錄</div>
+                    ? (
+                      <div className="empty-state" style={{ padding: "3rem 1.5rem", textAlign: "center" }}>
+                        <div style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>📡</div>
+                        <h4 style={{ marginBottom: "0.5rem" }}>{selectedSym} · 監控中</h4>
+                        <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", maxWidth: 420, margin: "0 auto" }}>
+                          此標的已納入模型 Watchlist，目前等待策略進場條件觸發（尚未產生歷史訊號）。
+                        </p>
+                      </div>
+                    )
                     : (
                       <>
                         <Chart data={chartData} markers={markers} title={`${selectedSym} · LVIS V2 訊號`} />
@@ -400,17 +439,87 @@ function Locked() {
   );
 }
 
-// Build synthetic OHLC from signal prices for chart display
-function buildOHLC(sigs) {
-  if (!sigs.length) return [];
-  const seen = new Set();
-  return sigs.map(s => {
-    let t = Math.floor(new Date(s.timestamp).getTime() / 1000);
-    // Ensure unique timestamps
-    while (seen.has(t)) t++;
-    seen.add(t);
-    const p = s.price || 100;
-    const v = p * 0.015;
-    return { time: t, open: +(p - v * 0.3).toFixed(2), high: +(p + v * 0.8).toFixed(2), low: +(p - v * 0.8).toFixed(2), close: +(p + v * 0.1).toFixed(2) };
-  }).sort((a, b) => a.time - b.time);
+// Generate realistic synthetic OHLC + precisely aligned markers from signals
+function generateCandlesAndMarkers(symSignals) {
+  if (!symSignals || symSignals.length === 0) {
+    return { chartData: [], markers: [] };
+  }
+
+  // Sort signals chronologically
+  const sortedSigs = [...symSignals].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  const firstSig = sortedSigs[0];
+  const lastSig = sortedSigs[sortedSigs.length - 1];
+
+  const basePrice = firstSig.price || 100;
+  const DAY_SEC = 86400;
+  const nowSec = Math.floor(Date.now() / 1000);
+
+  // Generate 35 to 45 daily bars ending near present
+  const totalBars = Math.max(35, sortedSigs.length * 8 + 15);
+  const endSec = Math.max(nowSec, Math.floor(new Date(lastSig.timestamp).getTime() / 1000) + 3 * DAY_SEC);
+  const startSec = endSec - totalBars * DAY_SEC;
+
+  // Map each signal to a bar index
+  const minIdx = 10;
+  const maxIdx = totalBars - 4;
+  const step = sortedSigs.length > 1 ? (maxIdx - minIdx) / (sortedSigs.length - 1) : 0;
+
+  const sigIndices = sortedSigs.map((sig, i) => {
+    const idx = sortedSigs.length === 1 ? Math.floor(totalBars * 0.65) : Math.round(minIdx + i * step);
+    return { sig, idx };
+  });
+
+  const chartData = [];
+  const markers = [];
+
+  let currPrice = basePrice * 0.95;
+  const vol = Math.max(0.5, basePrice * 0.015);
+
+  for (let i = 0; i < totalBars; i++) {
+    const t = startSec + i * DAY_SEC;
+    const matched = sigIndices.find(item => item.idx === i);
+
+    let targetPrice = currPrice;
+    if (matched) {
+      targetPrice = matched.sig.price || currPrice;
+    } else {
+      const nextSigItem = sigIndices.find(item => item.idx > i);
+      if (nextSigItem) {
+        const remaining = nextSigItem.idx - i;
+        const diff = (nextSigItem.sig.price || currPrice) - currPrice;
+        targetPrice = currPrice + diff / Math.max(1, remaining);
+      }
+    }
+
+    const noise = (Math.sin(i * 0.7) * 0.5 + (Math.random() - 0.5)) * vol;
+    const closeP = +(targetPrice + noise).toFixed(2);
+    const openP = +(currPrice + (Math.random() - 0.5) * vol * 0.4).toFixed(2);
+    const highP = +(Math.max(openP, closeP) + Math.random() * vol * 0.8).toFixed(2);
+    const lowP = +(Math.min(openP, closeP) - Math.random() * vol * 0.8).toFixed(2);
+
+    chartData.push({
+      time: t,
+      open: openP,
+      high: highP,
+      low: lowP,
+      close: closeP,
+    });
+
+    if (matched) {
+      const s = matched.sig;
+      const isEntry = s.type?.includes("ENTRY") || s.type?.includes("SCALE");
+      markers.push({
+        time: t,
+        position: isEntry ? "belowBar" : "aboveBar",
+        color: isEntry ? "#22c55e" : "#ef4444",
+        shape: isEntry ? "arrowUp" : "arrowDown",
+        text: `${s.type} @${(s.price || closeP).toFixed(2)}`,
+      });
+    }
+
+    currPrice = closeP;
+  }
+
+  markers.sort((a, b) => a.time - b.time);
+  return { chartData, markers };
 }

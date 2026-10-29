@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { auth, db, ADMIN_UID } from './firebase';
 import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from 'firebase/auth';
-import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 import { Loader2, LogOut, BarChart2, ShieldCheck, TrendingUp, Globe } from 'lucide-react';
 import ClientDashboard from './pages/ClientDashboard';
 import AdminDashboard from './pages/AdminDashboard';
@@ -31,12 +31,13 @@ function App() {
       setLoading(false);
 
       // 新用戶首次登入時自動建立 Firestore users/{uid} 文件
-      // Admin 後台才能看到此用戶（使用 merge:true 不覆蓋現有資料）
+      // Admin 後台才能看到此用戶；若已存在則僅更新 lastLogin 與基本公開資料，不觸碰 isPaid/isActive
       if (currentUser && currentUser.uid !== ADMIN_UID) {
         try {
-          await setDoc(
-            doc(db, 'users', currentUser.uid),
-            {
+          const userDocRef = doc(db, 'users', currentUser.uid);
+          const userSnap = await getDoc(userDocRef);
+          if (!userSnap.exists()) {
+            await setDoc(userDocRef, {
               email: currentUser.email,
               displayName: currentUser.displayName || '',
               photoURL: currentUser.photoURL || '',
@@ -44,21 +45,37 @@ function App() {
               lastLogin: serverTimestamp(),
               isActive: false,
               isPaid: false,
-            },
-            { merge: true }
-          );
-          await setDoc(
-            doc(db, 'users', currentUser.uid),
-            { lastLogin: serverTimestamp() },
-            { merge: true }
-          );
+            });
+          } else {
+            await setDoc(
+              userDocRef,
+              {
+                lastLogin: serverTimestamp(),
+                photoURL: currentUser.photoURL || '',
+                displayName: currentUser.displayName || userSnap.data()?.displayName || '',
+              },
+              { merge: true }
+            );
+          }
         } catch (e) {
-          console.warn('User doc init:', e.message);
+          console.warn('User doc init error:', e.message);
         }
       }
     });
     return () => unsubscribe();
   }, []);
+
+  // ── Listen isPaid from Firestore (real-time, placed before conditional returns for Rules of Hooks) ──
+  useEffect(() => {
+    if (!user || user.uid === ADMIN_UID) return;
+    const ref = doc(db, 'users', user.uid);
+    const unsub = onSnapshot(ref, snap => {
+      if (snap.exists()) setIsPaid(!!snap.data().isPaid);
+    }, (err) => {
+      console.warn('isPaid snapshot error:', err);
+    });
+    return unsub;
+  }, [user]);
 
   const handleGoogleLogin = async () => {
     setAuthLoading(true);
@@ -94,16 +111,6 @@ function App() {
       </div>
     );
   }
-
-  // ── Listen isPaid from Firestore (real-time) ──
-  useEffect(() => {
-    if (!user || user.uid === ADMIN_UID) return;
-    const ref = doc(db, 'users', user.uid);
-    const unsub = onSnapshot(ref, snap => {
-      if (snap.exists()) setIsPaid(!!snap.data().isPaid);
-    }, () => {});
-    return unsub;
-  }, [user]);
 
   // ── Logged in ──
   if (user) {
