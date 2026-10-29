@@ -46,3 +46,7 @@ logbook.log
 venv/
 env/
 .venv/
+
+# Local runner scripts (machine-specific paths)
+run_*.bat
+logs/
