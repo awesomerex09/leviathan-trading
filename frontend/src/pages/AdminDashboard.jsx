@@ -83,7 +83,7 @@ const AdminDashboard = ({ user, t }) => {
   }, []);
 
   useEffect(() => {
-    if (tab === 'users') fetchUsers();
+    if (tab === 'users') { fetchUsers(); fetchSignals(); }
     if (tab === 'watchlist') fetchWatchlist();
     if (tab === 'strategy') fetchParams();
     if (tab === 'signals') fetchSignals();
@@ -204,30 +204,63 @@ const AdminDashboard = ({ user, t }) => {
                         {expandedUser === u.uid && (
                           <div className="user-card-detail">
                             <div className="detail-section">
-                              <h4>{t.admin_orders_title}</h4>
-                              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                                UID: <code style={{ fontSize: '0.8rem' }}>{u.uid}</code>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700 }}>自動下單執行與委託對帳</h4>
+                                <span style={{
+                                  fontSize: '0.78rem',
+                                  padding: '0.2rem 0.6rem',
+                                  borderRadius: 999,
+                                  background: u.isPaid ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
+                                  color: u.isPaid ? '#22c55e' : '#ef4444',
+                                  fontWeight: 700
+                                }}>
+                                  {u.isPaid ? '🟢 自動下單已開通（同步 Shioaji 模擬單）' : '⏸ 尚未開通付費'}
+                                </span>
+                              </div>
+                              <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
+                                UID: <code style={{ fontSize: '0.78rem' }}>{u.uid}</code> · 帳號：<strong>{u.email}</strong> · 模型監控：49 檔全標的
                               </p>
-                              {(u.orders || []).length === 0
-                                ? <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.5rem' }}>{t.admin_orders_empty}</p>
-                                : (
-                                  <div className="orders-table mini" style={{ marginTop: '0.75rem' }}>
+
+                              {u.isPaid ? (
+                                (simOrders || []).length === 0 ? (
+                                  <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>排程掃描等待觸發中（每日 13:35 台股 / 04:10 美股自動執行）</p>
+                                ) : (
+                                  <div className="orders-table mini" style={{ marginTop: '0.5rem' }}>
+                                    <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--accent)', marginBottom: '0.4rem' }}>
+                                      📋 最新自動模擬下單紀錄（Shioaji API · 最新 {Math.min(simOrders.length, 6)} 筆）：
+                                    </div>
                                     <table>
-                                      <thead><tr><th>時間</th><th>標的</th><th>動作</th><th>價格</th><th>狀態</th></tr></thead>
+                                      <thead><tr><th>時間</th><th>標的</th><th>市場</th><th>動作</th><th>價格</th><th>張數/股數</th><th>單號</th><th>狀態</th></tr></thead>
                                       <tbody>
-                                        {(u.orders || []).slice(0, 5).map((o, i) => (
+                                        {simOrders.slice(0, 6).map((o, i) => (
                                           <tr key={i}>
-                                            <td>{new Date(o.timestamp).toLocaleString('zh-TW')}</td>
-                                            <td>{o.symbol}</td>
-                                            <td><span className={`badge ${o.action === 'BUY' ? 'badge-buy' : 'badge-sell'}`}>{o.action === 'BUY' ? t.action_buy : t.action_sell}</span></td>
+                                            <td style={{ fontSize: '0.75rem' }}>{new Date(o.timestamp).toLocaleString('zh-TW')}</td>
+                                            <td><strong>{o.symbol}</strong></td>
+                                            <td>
+                                              <span style={{ fontSize: '0.72rem', padding: '0.1rem 0.35rem', borderRadius: '0.25rem', background: 'rgba(128,128,128,0.1)' }}>
+                                                {o.market || (o.symbol?.match(/^\d+$/) ? 'TW' : 'US')}
+                                              </span>
+                                            </td>
+                                            <td>
+                                              <span className={`badge ${o.type?.includes('BUY') ? 'badge-buy' : 'badge-sell'}`}>
+                                                {o.type?.includes('BUY') ? '買進' : '賣出'}
+                                              </span>
+                                            </td>
                                             <td>{o.price?.toLocaleString()}</td>
-                                            <td><span className={`badge ${o.status === 'SUCCESS' ? 'badge-success' : 'badge-fail'}`}>{o.status === 'SUCCESS' ? '✓' : '✗'}</span></td>
+                                            <td>{o.qty} {o.market === 'TW' || o.symbol?.match(/^\d+$/) ? '張' : '股'}</td>
+                                            <td><code style={{ fontSize: '0.75rem' }}>{o.order_id || '模擬下單'}</code></td>
+                                            <td><span className="badge badge-success">✓ {o.status?.replace('OrderStatus.', '') || '成功'}</span></td>
                                           </tr>
                                         ))}
                                       </tbody>
                                     </table>
                                   </div>
-                                )}
+                                )
+                              ) : (
+                                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
+                                  此帳號尚未開通付費，點擊上方「開通付費」即可開通自動下單權限。
+                                </p>
+                              )}
                             </div>
                           </div>
                         )}
