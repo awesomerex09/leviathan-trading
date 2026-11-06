@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { db } from "../firebase";
 import {
   collection, query, orderBy, limit, onSnapshot,
-  doc,
+  doc, getDoc,
 } from "firebase/firestore";
 import {
   Loader2, TrendingUp, TrendingDown, DollarSign,
@@ -58,6 +58,11 @@ export default function ClientDashboard({ user, t, isPaid }) {
 
   // Orders tab filter
   const [orderFilter, setOrderFilter] = useState("ALL"); // ALL / TW / US / BUY / SELL
+
+  // 真實 OHLC 快取（由後端 Python 寫入 Firestore price_data）
+  const priceDataCache = useRef({});
+  const [realOHLC, setRealOHLC] = useState(null);         // 當前選中標的的真實 OHLC
+  const [ohlcLoading, setOhlcLoading] = useState(false);  // K 線載入中旗標
 
   // Watchlist listener (所有登入用戶可讀取 49 個標的)
   useEffect(() => {
@@ -193,14 +198,51 @@ export default function ClientDashboard({ user, t, isPaid }) {
       .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
   }, [simOrders, selectedSym]);
 
-  // 生成 K 線資料與進出場 Markers
-  const { chartData, markers } = useMemo(() => {
-    return generateCandlesAndMarkers(selectedSym, currentSymSignals, currentSymOrders);
-  }, [selectedSym, currentSymSignals, currentSymOrders]);
+  // 生成 K 線資料與進出場 Markers（傳入真實 OHLC 優先使用）
+  const { chartData, markers, isRealData } = useMemo(() => {
+    return generateCandlesAndMarkers(selectedSym, currentSymSignals, currentSymOrders, realOHLC);
+  }, [selectedSym, currentSymSignals, currentSymOrders, realOHLC]);
+
+  // 載入 Firestore price_data（真實 OHLC 日線，由後端 Python 寫入）
+  const loadPriceData = useCallback(async (sym) => {
+    if (!sym) return;
+    if (priceDataCache.current[sym] !== undefined) {
+      setRealOHLC(priceDataCache.current[sym]);
+      return;
+    }
+    setOhlcLoading(true);
+    try {
+      const snap = await getDoc(doc(db, 'price_data', sym));
+      if (snap.exists()) {
+        const data = snap.data();
+        const ohlc = (data.ohlc || []).filter(c =>
+          c && c.time && c.open != null && c.high != null && c.low != null && c.close != null
+        ).sort((a, b) => a.time - b.time);
+        priceDataCache.current[sym] = ohlc.length >= 5 ? ohlc : null;
+      } else {
+        priceDataCache.current[sym] = null;
+      }
+      setRealOHLC(priceDataCache.current[sym]);
+    } catch (e) {
+      console.warn('price_data fetch error:', e);
+      priceDataCache.current[sym] = null;
+      setRealOHLC(null);
+    } finally {
+      setOhlcLoading(false);
+    }
+  }, []);
+
+  // 當選中標的改變時，自動載入真實 OHLC
+  useEffect(() => {
+    if (selectedSym) {
+      loadPriceData(selectedSym);
+    }
+  }, [selectedSym, loadPriceData]);
 
   // 切換選中標的
   const selectSymbol = (sym) => {
     setChartLoading(true);
+    setRealOHLC(null); // 先清除舊 OHLC
     setSelectedSym(sym);
     setTimeout(() => setChartLoading(false), 50);
   };
@@ -442,16 +484,40 @@ export default function ClientDashboard({ user, t, isPaid }) {
                 background: "var(--card-bg)", border: "1px solid var(--border)",
                 borderRadius: "0.875rem", padding: "1.25rem", marginBottom: "1.5rem"
               }}>
-                {chartLoading ? (
-                  <div style={{ textAlign: "center", padding: "4rem" }}><Loader2 size={32} className="animate-spin" /></div>
+                {chartLoading || ohlcLoading ? (
+                  <div style={{ textAlign: "center", padding: "4rem" }}>
+                    <Loader2 size={32} className="animate-spin" />
+                    <p style={{ marginTop: "0.75rem", fontSize: "0.85rem", color: "var(--text-muted)" }}>
+                      {ohlcLoading ? "載入真實行情資料中..." : "切換標的中..."}
+                    </p>
+                  </div>
                 ) : (
                   <>
+                    {/* 資料來源標示 */}
+                    <div style={{ marginBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      {isRealData ? (
+                        <span style={{
+                          fontSize: "0.75rem", padding: "0.2rem 0.6rem", borderRadius: 999,
+                          background: "rgba(34,197,94,0.15)", color: "#22c55e", fontWeight: 700
+                        }}>
+                          ✅ 真實行情 (Yahoo Finance 日線，由後端每日更新)
+                        </span>
+                      ) : (
+                        <span style={{
+                          fontSize: "0.75rem", padding: "0.2rem 0.6rem", borderRadius: 999,
+                          background: "rgba(239,68,68,0.12)", color: "#f59e0b", fontWeight: 700
+                        }}>
+                          ⚠️ 此標的尚無真實行情快取（後端下次排程執行後自動更新），目前顯示訊號時間軸輔助圖
+                        </span>
+                      )}
+                    </div>
+
                     <Chart
                       data={chartData}
                       markers={markers}
                       symbol={selectedSym}
                       title={`${selectedSym} ${SYMBOL_NAMES[selectedSym] || ''} · LVIS V2 策略 K 線對照`}
-                      subtitle={`${selectedSym.match(/^\d+$/) ? '台股' : '美股'} · 包含策略進出場點位、加碼點與停損標記`}
+                      subtitle={`${selectedSym.match(/^\d+$/) ? '台股' : '美股'} · ${isRealData ? '真實歷史日K · ' : ''}包含策略進出場點位、加碼點與停損標記`}
                     />
 
                     {/* 圖例說明 */}
@@ -551,7 +617,7 @@ export default function ClientDashboard({ user, t, isPaid }) {
         {tab === "orders" && (
           !isPaid ? <Locked /> : (
             <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: "0.875rem", padding: "1.25rem" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.75rem", marginBottom: "1rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.75rem", marginBottom: "0.75rem" }}>
                 <div>
                   <h3 style={{ fontSize: "1.05rem", fontWeight: 700, margin: 0 }}>
                     📋 自動模擬委託紀錄 ({simOrders.length} 筆)
@@ -580,6 +646,18 @@ export default function ClientDashboard({ user, t, isPaid }) {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              {/* 狀態說明 */}
+              <div style={{
+                fontSize: "0.78rem", padding: "0.6rem 0.9rem", borderRadius: "0.5rem",
+                background: "rgba(59,130,246,0.07)", border: "1px solid rgba(59,130,246,0.2)",
+                color: "var(--text-muted)", marginBottom: "1rem", lineHeight: 1.7
+              }}>
+                📌 以下為 Shioaji API <strong>模擬環境</strong>實際委託記錄（非虛擬資料）。
+                &nbsp;<strong style={{ color: "#22c55e" }}>✅ PendingSubmit</strong> = 委託已成功送出（Shioaji 受理）；
+                &nbsp;<strong style={{ color: "#ef4444" }}>❌ Failed</strong> = 委託失敗（通常因非交易時間、漲跌停限制或週末執行）。
+                有 order_id 的委託表示已確實進入模擬撮合系統。
               </div>
 
               {simOrders.length === 0 ? (
@@ -615,6 +693,11 @@ export default function ClientDashboard({ user, t, isPaid }) {
                         .slice(0, 100)
                         .map((o, idx) => {
                           const isBuy = o.type?.includes("BUY");
+                          // 判斷真實委託狀態
+                          const rawStatus = o.status || '';
+                          const isFailed = rawStatus.includes('Failed') || rawStatus.includes('failed') || (!o.order_id && rawStatus !== '');
+                          const isPending = rawStatus.includes('PendingSubmit');
+                          const hasOrderId = o.order_id && o.order_id.length > 0;
                           return (
                             <tr key={o.id || idx}>
                               <td style={{ fontSize: "0.78rem" }}>{new Date(o.timestamp).toLocaleString("zh-TW")}</td>
@@ -630,22 +713,47 @@ export default function ClientDashboard({ user, t, isPaid }) {
                                 </span>
                               </td>
                               <td>
-                                <span className={`badge ${isBuy ? 'badge-buy' : 'badge-sell'}`} style={{
+                                <span style={{
                                   background: isBuy ? 'rgba(239,68,68,0.12)' : 'rgba(34,197,94,0.12)',
                                   color: isBuy ? '#ef4444' : '#22c55e',
-                                  fontWeight: 700
+                                  padding: "0.2rem 0.5rem", borderRadius: 999, fontSize: "0.78rem", fontWeight: 700
                                 }}>
                                   {isBuy ? '▲ 買進' : '▼ 賣出'}
                                 </span>
                               </td>
                               <td>NT$ {fmtDec(o.price)}</td>
                               <td>{o.qty} {o.market === 'TW' || o.symbol?.match(/^\d+$/) ? '張' : '股'}</td>
-                              <td><code style={{ fontSize: "0.78rem" }}>{o.order_id || '模擬下單'}</code></td>
+                              <td>
+                                <code style={{ fontSize: "0.78rem" }}>
+                                  {hasOrderId ? o.order_id : <span style={{ color: "var(--text-muted)" }}>無單號</span>}
+                                </code>
+                              </td>
                               <td><span style={{ fontSize: "0.75rem", color: "var(--accent)" }}>{o.signal || '-'}</span></td>
                               <td>
-                                <span className="badge badge-success">
-                                  ✓ {o.status?.replace('OrderStatus.', '') || '成功'}
-                                </span>
+                                {isFailed ? (
+                                  <span style={{
+                                    display: "inline-flex", alignItems: "center", gap: "0.25rem",
+                                    padding: "0.2rem 0.6rem", borderRadius: 999, fontSize: "0.75rem",
+                                    background: "rgba(239,68,68,0.12)", color: "#ef4444", fontWeight: 700
+                                  }} title="委託失敗：通常因非交易時間、價格超出漲跌停限制或週末執行">
+                                    ❌ 委託失敗
+                                  </span>
+                                ) : isPending ? (
+                                  <span style={{
+                                    display: "inline-flex", alignItems: "center", gap: "0.25rem",
+                                    padding: "0.2rem 0.6rem", borderRadius: 999, fontSize: "0.75rem",
+                                    background: "rgba(34,197,94,0.12)", color: "#22c55e", fontWeight: 700
+                                  }} title="委託已成功送出，Shioaji 模擬環境受理中">
+                                    ✅ 委託送出
+                                  </span>
+                                ) : (
+                                  <span style={{
+                                    padding: "0.2rem 0.6rem", borderRadius: 999, fontSize: "0.75rem",
+                                    background: "rgba(148,163,184,0.12)", color: "#94a3b8", fontWeight: 600
+                                  }}>
+                                    {rawStatus.replace('OrderStatus.', '') || '未知'}
+                                  </span>
+                                )}
                               </td>
                               <td>
                                 <button
@@ -749,10 +857,13 @@ function Locked() {
 }
 
 /**
- * 依據歷史訊號與真實委託價格生成連續真實的日 K 線與對齊 Markers
+ * 生成 K 線資料與進出場 Markers
+ * - 優先使用後端寫入 Firestore 的真實 OHLC 日線（realOHLC）
+ * - 若無真實 OHLC，fallback 為根據訊號錨點合成（並標明為模擬資料）
  */
-function generateCandlesAndMarkers(symbol, symSignals = [], symOrders = []) {
-  // 合併來自 signals 與 simOrders 的價格錨點
+function generateCandlesAndMarkers(symbol, symSignals = [], symOrders = [], realOHLC = null) {
+
+  // ── 建立 Markers（來自 Firestore 真實訊號，不管 K 線來源）
   const priceAnchors = [];
 
   for (const s of symSignals) {
@@ -762,54 +873,79 @@ function generateCandlesAndMarkers(symbol, symSignals = [], symOrders = []) {
         time: Math.floor(new Date(s.timestamp).getTime() / 1000),
         type: s.type,
         comment: s.comment,
-        isEntry: s.type?.includes('ENTRY') || s.type?.includes('SCALE'),
+        isEntry: s.type?.includes('ENTRY') || s.type?.includes('SCALE') || s.type?.includes('TAKEOVER'),
+        source: 'signal',
       });
     }
   }
 
-  for (const o of symOrders) {
-    if (o.price && o.timestamp) {
-      priceAnchors.push({
-        price: Number(o.price),
-        time: Math.floor(new Date(o.timestamp).getTime() / 1000),
-        type: o.signal || o.type,
-        comment: `Order #${o.order_id || ''}`,
-        isEntry: o.type?.includes('BUY'),
-      });
-    }
-  }
-
+  // 注意：委託錨點通常時間戳相同或相近，只用 signals 的 Markers 以免重複
   priceAnchors.sort((a, b) => a.time - b.time);
 
-  // 決定基礎基準價格
+  // ── 路徑 A：有真實 OHLC（後端 Python 由 yfinance 寫入 Firestore）
+  if (realOHLC && realOHLC.length >= 5) {
+    // 直接用真實 K 線資料
+    const chartData = realOHLC.map(c => ({
+      time: c.time,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+    }));
+
+    // 把 Firestore 訊號錨點對齊到最近的真實 K 棒
+    const markers = [];
+    const DAY_SEC = 86400;
+    for (const anchor of priceAnchors) {
+      // 找最近的 K 棒（允許 ±3 天容差，訊號時間戳可能在週末或夜間）
+      let nearest = null;
+      let minDiff = Infinity;
+      for (const c of chartData) {
+        const diff = Math.abs(c.time - anchor.time);
+        if (diff < minDiff && diff <= DAY_SEC * 3) {
+          minDiff = diff;
+          nearest = c;
+        }
+      }
+      const markerTime = nearest ? nearest.time : anchor.time;
+      if (!markers.some(m => m.time === markerTime && m.text.startsWith(anchor.type))) {
+        markers.push({
+          time: markerTime,
+          position: anchor.isEntry ? 'belowBar' : 'aboveBar',
+          color: anchor.isEntry ? '#ef4444' : '#3b82f6',
+          shape: anchor.isEntry ? 'arrowUp' : 'arrowDown',
+          text: `${anchor.type} @${anchor.price.toFixed(2)}`,
+        });
+      }
+    }
+    markers.sort((a, b) => a.time - b.time);
+    return { chartData, markers, isRealData: true };
+  }
+
+  // ── 路徑 B：無真實 OHLC，fallback 合成（依訊號錨點插值）
   let basePrice = 100;
   if (priceAnchors.length > 0) {
     basePrice = priceAnchors[0].price;
   } else if (symbol.match(/^\d+$/)) {
-    // 台股常見價格預設
     basePrice = symbol === '2330' ? 1040 : symbol === '2317' ? 215 : 150;
   } else {
-    // 美股常見價格預設
     basePrice = symbol === 'NVDA' ? 185 : symbol === 'VRT' ? 220 : 65;
   }
 
   const DAY_SEC = 86400;
   const nowSec = Math.floor(Date.now() / 1000);
-  const totalBars = 50; // 固定顯示 50 根日 K 線
+  const totalBars = 60;
   const endSec = nowSec;
   const startSec = endSec - totalBars * DAY_SEC;
 
-  // 映射價格錨點到 K 棒
   const chartData = [];
   const markers = [];
-
   let currPrice = basePrice * 0.96;
   const vol = Math.max(0.5, basePrice * 0.018);
 
   for (let i = 0; i < totalBars; i++) {
     const t = startSec + i * DAY_SEC;
 
-    // 尋找此時間點最接近的錨點
     let targetPrice = currPrice;
     const anchor = priceAnchors.find(a => Math.abs(a.time - t) <= DAY_SEC * 1.5);
 
@@ -829,13 +965,7 @@ function generateCandlesAndMarkers(symbol, symSignals = [], symOrders = []) {
     const highP  = +(Math.max(openP, closeP) + Math.random() * vol * 0.6).toFixed(2);
     const lowP   = +(Math.min(openP, closeP) - Math.random() * vol * 0.6).toFixed(2);
 
-    chartData.push({
-      time: t,
-      open: openP,
-      high: highP,
-      low: lowP,
-      close: closeP,
-    });
+    chartData.push({ time: t, open: openP, high: highP, low: lowP, close: closeP });
 
     if (anchor && !markers.some(m => m.time === t)) {
       markers.push({
@@ -851,5 +981,5 @@ function generateCandlesAndMarkers(symbol, symSignals = [], symOrders = []) {
   }
 
   markers.sort((a, b) => a.time - b.time);
-  return { chartData, markers };
+  return { chartData, markers, isRealData: false };
 }
