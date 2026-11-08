@@ -2,12 +2,12 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { db } from "../firebase";
 import {
   collection, query, orderBy, limit, onSnapshot,
-  doc, getDoc,
+  doc, getDoc, setDoc,
 } from "firebase/firestore";
 import {
   Loader2, TrendingUp, TrendingDown, DollarSign,
   BarChart2, List, Settings, Lock,
-  Search, Eye
+  Search, Eye, Shield, Key, Zap, Check, AlertCircle, Trash2
 } from "lucide-react";
 import Chart from "../Chart";
 
@@ -64,6 +64,128 @@ export default function ClientDashboard({ user, t, isPaid }) {
   const [realOHLC, setRealOHLC] = useState(null);         // 當前選中標的的真實 OHLC
   const [ohlcLoading, setOhlcLoading] = useState(false);  // K 線載入中旗標
 
+  // 用戶交易模式與個人 Shioaji 串接設定
+  const [userConfig, setUserConfig] = useState({
+    trading_mode: 'simulation',
+    shioaji_api_key: '',
+    shioaji_secret_key: '',
+    person_id: '',
+    ca_password: '',
+    orders_cleared_at: null,
+  });
+  const [formData, setFormData] = useState({
+    trading_mode: 'simulation',
+    shioaji_api_key: '',
+    shioaji_secret_key: '',
+    person_id: '',
+    ca_password: '',
+  });
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [configMsg, setConfigMsg] = useState('');
+  const [showSecrets, setShowSecrets] = useState(false);
+
+  // 監聽當前用戶的設定檔
+  useEffect(() => {
+    if (!user?.uid) return;
+    const unsub = onSnapshot(doc(db, "users", user.uid), snap => {
+      if (snap.exists()) {
+        const d = snap.data();
+        const cfg = {
+          trading_mode: d.trading_mode || 'simulation',
+          shioaji_api_key: d.shioaji_api_key || '',
+          shioaji_secret_key: d.shioaji_secret_key || '',
+          person_id: d.person_id || '',
+          ca_password: d.ca_password || '',
+          orders_cleared_at: d.orders_cleared_at || null,
+        };
+        setUserConfig(cfg);
+        setFormData(prev => ({
+          ...prev,
+          trading_mode: cfg.trading_mode,
+          shioaji_api_key: cfg.shioaji_api_key,
+          shioaji_secret_key: cfg.shioaji_secret_key,
+          person_id: cfg.person_id,
+          ca_password: cfg.ca_password,
+        }));
+      }
+    }, err => console.warn("User doc snapshot error:", err));
+    return unsub;
+  }, [user?.uid]);
+
+  // 儲存個人的交易串接設定
+  const handleSaveTradingConfig = async (e) => {
+    if (e) e.preventDefault();
+    if (!user?.uid) return;
+    setSavingConfig(true);
+    setConfigMsg('');
+    try {
+      await setDoc(doc(db, "users", user.uid), {
+        trading_mode: formData.trading_mode,
+        shioaji_api_key: formData.shioaji_api_key.trim(),
+        shioaji_secret_key: formData.shioaji_secret_key.trim(),
+        person_id: formData.person_id.trim().toUpperCase(),
+        ca_password: formData.ca_password.trim(),
+        updated_at: new Date().toISOString(),
+      }, { merge: true });
+      setConfigMsg('✅ 設定儲存成功！' + (formData.trading_mode === 'live' ? '已切換為【真實下單】模式' : '已切換為【模擬下單】模式'));
+      setTimeout(() => setConfigMsg(''), 4000);
+    } catch (err) {
+      console.error(err);
+      setConfigMsg('❌ 儲存失敗：' + err.message);
+    } finally {
+      setSavingConfig(false);
+    }
+  };
+
+  // 清除個人模擬委託紀錄（重置對帳時間軸）
+  const handleClearMyOrders = async () => {
+    if (!user?.uid) return;
+    if (window.confirm("確定要清空您畫面上目前的委託紀錄嗎？\n清空後歷史紀錄將歸零，系統在下個交易日產生新委託時會重新記錄。")) {
+      try {
+        const nowIso = new Date().toISOString();
+        await setDoc(doc(db, "users", user.uid), {
+          orders_cleared_at: nowIso,
+        }, { merge: true });
+        alert("✅ 委託紀錄已清除歸零！");
+      } catch (err) {
+        alert("清除失敗: " + err.message);
+      }
+    }
+  };
+
+  // 重置回預設模擬環境（清空個人憑證）
+  const handleResetCredentials = async () => {
+    if (!user?.uid) return;
+    if (window.confirm("確定要清除您已綁定的 API 金鑰並切換回預設模擬模式嗎？")) {
+      try {
+        await setDoc(doc(db, "users", user.uid), {
+          trading_mode: 'simulation',
+          shioaji_api_key: '',
+          shioaji_secret_key: '',
+          person_id: '',
+          ca_password: '',
+        }, { merge: true });
+        setFormData({
+          trading_mode: 'simulation',
+          shioaji_api_key: '',
+          shioaji_secret_key: '',
+          person_id: '',
+          ca_password: '',
+        });
+        alert("✅ 已重置為預設模擬模式！");
+      } catch (err) {
+        alert("重置失敗: " + err.message);
+      }
+    }
+  };
+
+  // 依據用戶的 orders_cleared_at 排除被清空的舊委託
+  const visibleOrders = useMemo(() => {
+    if (!userConfig.orders_cleared_at) return simOrders;
+    const clearedMs = new Date(userConfig.orders_cleared_at).getTime();
+    return simOrders.filter(o => new Date(o.timestamp).getTime() > clearedMs);
+  }, [simOrders, userConfig.orders_cleared_at]);
+
   // Watchlist listener (所有登入用戶可讀取 49 個標的)
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "watchlist", "config"), snap => {
@@ -91,15 +213,28 @@ export default function ClientDashboard({ user, t, isPaid }) {
     return () => { u1(); u2(); };
   }, [isPaid]);
 
-  // 計算投資組合：結合實際模擬委託（sim_orders）與最新訊號
+  // 計算投資組合：結合實際模擬委託（visibleOrders）與最新訊號
   useEffect(() => {
-    if (!simOrders.length && !signals.length) return;
+    if (!visibleOrders.length && !signals.length) {
+      setPortfolio({
+        initCap: INIT_CAP,
+        cash: INIT_CAP,
+        totalEquity: INIT_CAP,
+        positionValue: 0,
+        pnl: 0,
+        unrealPnl: 0,
+        realPnl: 0,
+        ret: 0,
+        openPos: [],
+      });
+      return;
+    }
     let cash = INIT_CAP;
     const positions = {};
     let realPnl = 0;
 
     // 1. 處理已送出的模擬委託
-    const sortedOrders = [...simOrders].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    const sortedOrders = [...visibleOrders].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
     for (const o of sortedOrders) {
       const { symbol, type, price, qty } = o;
       if (!price || !qty) continue;
@@ -169,7 +304,7 @@ export default function ClientDashboard({ user, t, isPaid }) {
       ret: (totalPnl / INIT_CAP) * 100,
       openPos,
     });
-  }, [simOrders, signals]);
+  }, [visibleOrders, signals]);
 
   // 所有 49 個標的清單（台股 + 美股），並按市場排序
   const allSymbols = useMemo(() => {
@@ -193,10 +328,10 @@ export default function ClientDashboard({ user, t, isPaid }) {
 
   const currentSymOrders = useMemo(() => {
     if (!selectedSym) return [];
-    return simOrders
+    return visibleOrders
       .filter(o => o.symbol === selectedSym)
       .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-  }, [simOrders, selectedSym]);
+  }, [visibleOrders, selectedSym]);
 
   // 生成 K 線資料與進出場 Markers（傳入真實 OHLC 優先使用）
   const { chartData, markers, isRealData } = useMemo(() => {
@@ -259,7 +394,7 @@ export default function ClientDashboard({ user, t, isPaid }) {
         {[
           { key: "portfolio", icon: <DollarSign size={16}/>, label: "投資組合對帳" },
           { key: "chart",     icon: <BarChart2  size={16}/>, label: "K線訊號對照" },
-          { key: "orders",    icon: <List       size={16}/>, label: `委託紀錄 (${simOrders.length})` },
+          { key: "orders",    icon: <List       size={16}/>, label: `委託紀錄 (${visibleOrders.length})` },
           { key: "settings",  icon: <Settings   size={16}/>, label: "帳號設定" },
         ].map(tb => (
           <button key={tb.key} className={tab === tb.key ? "tab active" : "tab"} onClick={() => setTab(tb.key)}>
@@ -612,18 +747,68 @@ export default function ClientDashboard({ user, t, isPaid }) {
         )}
 
         {/* ══════════════════════════════════════════════════════════
-            TAB 3: 委託紀錄（即時 Shioaji 自動模擬委託對帳）
+            TAB 3: 委託紀錄（即時 Shioaji 自動模擬/真實委託對帳）
         ══════════════════════════════════════════════════════════ */}
         {tab === "orders" && (
           !isPaid ? <Locked /> : (
             <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: "0.875rem", padding: "1.25rem" }}>
+              
+              {/* 頂部下單模式與切換橫幅 */}
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap',
+                gap: '0.75rem', padding: '0.85rem 1.1rem', borderRadius: '0.75rem',
+                background: userConfig.trading_mode === 'live' ? 'rgba(239, 68, 68, 0.08)' : 'rgba(34, 197, 94, 0.08)',
+                border: userConfig.trading_mode === 'live' ? '1px solid rgba(239, 68, 68, 0.25)' : '1px solid rgba(34, 197, 94, 0.25)',
+                marginBottom: '1.25rem',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                  <span style={{ fontSize: '1.25rem' }}>{userConfig.trading_mode === 'live' ? '🔴' : '🟢'}</span>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <strong style={{ fontSize: '0.95rem', color: userConfig.trading_mode === 'live' ? '#ef4444' : '#22c55e' }}>
+                        {userConfig.trading_mode === 'live' ? '真實下單串接模式 (Live Trading)' : '模擬自動下單模式 (Simulation)'}
+                      </strong>
+                      <span style={{
+                        fontSize: '0.72rem', padding: '0.15rem 0.5rem', borderRadius: '0.3rem',
+                        background: userConfig.trading_mode === 'live' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(34, 197, 94, 0.15)',
+                        color: userConfig.trading_mode === 'live' ? '#ef4444' : '#22c55e', fontWeight: 600
+                      }}>
+                        {userConfig.trading_mode === 'live' ? '實盤' : '模擬'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                      {userConfig.trading_mode === 'live'
+                        ? (userConfig.shioaji_api_key ? '已綁定個人 API 金鑰，由排程自動發送至永豐金實盤' : '尚未完整設定 API 金鑰，請點擊右側設定進行個人串接')
+                        : '由永豐金 Shioaji 模擬撮合環境每日自動執行，全透明追蹤，不動用真實資金'}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <button
+                    className="btn btn-outline"
+                    style={{ padding: '0.35rem 0.8rem', fontSize: '0.78rem', borderRadius: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                    onClick={() => setTab('settings')}
+                  >
+                    <Settings size={14} /> 串接真實帳號 / 切換模式
+                  </button>
+                  <button
+                    className="btn btn-outline"
+                    style={{ padding: '0.35rem 0.8rem', fontSize: '0.78rem', borderRadius: '0.5rem', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                    onClick={handleClearMyOrders}
+                    title="清空此畫面目前的歷史模擬紀錄"
+                  >
+                    <Trash2 size={14} /> 清除我的模擬紀錄
+                  </button>
+                </div>
+              </div>
+
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.75rem", marginBottom: "0.75rem" }}>
                 <div>
                   <h3 style={{ fontSize: "1.05rem", fontWeight: 700, margin: 0 }}>
-                    📋 自動模擬委託紀錄 ({simOrders.length} 筆)
+                    📋 委託紀錄明細 ({visibleOrders.length} 筆)
                   </h3>
                   <p style={{ margin: "0.25rem 0 0", fontSize: "0.82rem", color: "var(--text-muted)" }}>
-                    透過永豐金 Shioaji API 模擬環境每日自動執行，全透明可對照驗證
+                    {userConfig.trading_mode === 'live' ? '永豐金真實帳戶實盤委託紀錄' : '永豐金 Shioaji 模擬撮合環境委託紀錄，全透明可對照驗證'}
                   </p>
                 </div>
 
@@ -654,15 +839,18 @@ export default function ClientDashboard({ user, t, isPaid }) {
                 background: "rgba(59,130,246,0.07)", border: "1px solid rgba(59,130,246,0.2)",
                 color: "var(--text-muted)", marginBottom: "1rem", lineHeight: 1.7
               }}>
-                📌 以下為 Shioaji API <strong>模擬環境</strong>實際委託記錄（非虛擬資料）。
-                &nbsp;<strong style={{ color: "#22c55e" }}>✅ PendingSubmit</strong> = 委託已成功送出（Shioaji 受理）；
-                &nbsp;<strong style={{ color: "#ef4444" }}>❌ Failed</strong> = 委託失敗（通常因非交易時間、漲跌停限制或週末執行）。
-                有 order_id 的委託表示已確實進入模擬撮合系統。
+                📌 委託狀態說明：
+                &nbsp;<strong style={{ color: "#22c55e" }}>✅ PendingSubmit</strong> = 委託已成功送出（Shioaji 撮合系統受理中）；
+                &nbsp;<strong style={{ color: "#ef4444" }}>❌ Failed</strong> = 委託失敗（通常因非交易時間、價格超出漲跌停限制或週末執行）。
+                有 order_id 的委託表示已確實進入證券系統。
               </div>
 
-              {simOrders.length === 0 ? (
+              {visibleOrders.length === 0 ? (
                 <div className="empty-state" style={{ padding: "3rem", textAlign: "center" }}>
-                  <p style={{ margin: 0, color: "var(--text-muted)" }}>尚無委託紀錄，工作排程器在交易日將自動執行</p>
+                  <p style={{ margin: 0, color: "var(--text-muted)" }}>
+                    尚無委託紀錄（已重置或等待排程執行）。
+                    每日收盤後（13:35 台股 / 04:10 美股）系統將自動依策略訊號執行委託。
+                  </p>
                 </div>
               ) : (
                 <div className="orders-table">
@@ -682,7 +870,7 @@ export default function ClientDashboard({ user, t, isPaid }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {simOrders
+                      {visibleOrders
                         .filter(o => {
                           if (orderFilter === "TW" && !o.symbol?.match(/^\d+$/)) return false;
                           if (orderFilter === "US" && o.symbol?.match(/^\d+$/)) return false;
@@ -779,9 +967,10 @@ export default function ClientDashboard({ user, t, isPaid }) {
             TAB 4: 帳號設定
         ══════════════════════════════════════════════════════════ */}
         {tab === "settings" && (
-          <div style={{ maxWidth: 520 }}>
+          <div style={{ maxWidth: 680 }}>
+            {/* 1. 基本訂閱權限卡 */}
             <h3 style={{ marginBottom: "1rem", fontSize: "1.1rem" }}>👤 帳戶訂閱與權限</h3>
-            <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: "0.875rem", padding: "1.5rem" }}>
+            <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: "0.875rem", padding: "1.5rem", marginBottom: "1.5rem" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1.25rem" }}>
                 {user.photoURL ? (
                   <img src={user.photoURL} alt="" style={{ width: 48, height: 48, borderRadius: "50%" }}/>
@@ -808,8 +997,13 @@ export default function ClientDashboard({ user, t, isPaid }) {
                   </span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
-                  <span style={{ fontSize: "0.88rem", fontWeight: 500 }}>下單環境：</span>
-                  <span style={{ fontSize: "0.85rem", color: "var(--text)" }}>永豐金證券 Shioaji API (模擬模式)</span>
+                  <span style={{ fontSize: "0.88rem", fontWeight: 500 }}>當前運作模式：</span>
+                  <span style={{
+                    fontSize: "0.85rem", fontWeight: 700,
+                    color: userConfig.trading_mode === 'live' ? "#ef4444" : "#22c55e"
+                  }}>
+                    {userConfig.trading_mode === 'live' ? "🔴 永豐金證券 Shioaji API (真實下單串接)" : "🟢 永豐金證券 Shioaji API (模擬模式)"}
+                  </span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
                   <span style={{ fontSize: "0.88rem", fontWeight: 500 }}>監控模型：</span>
@@ -817,8 +1011,202 @@ export default function ClientDashboard({ user, t, isPaid }) {
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span style={{ fontSize: "0.88rem", fontWeight: 500 }}>自動排程時間：</span>
-                  <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>週一～五 13:35 / 04:10</span>
+                  <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>週一～五 13:35（台股） / 04:10（美股）</span>
                 </div>
+              </div>
+            </div>
+
+            {/* 2. 永豐金證券 Shioaji API 串接與下單模式切換 */}
+            <h3 style={{ marginBottom: "1rem", fontSize: "1.1rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <Zap size={20} color="var(--accent)" /> 永豐金證券 Shioaji API 交易模式與個人串接
+            </h3>
+
+            <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: "0.875rem", padding: "1.5rem" }}>
+              <form onSubmit={handleSaveTradingConfig}>
+                {/* 模式切換 */}
+                <div style={{ marginBottom: "1.5rem" }}>
+                  <label style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, marginBottom: "0.6rem" }}>
+                    選擇自動下單模式：
+                  </label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+                    <div
+                      onClick={() => setFormData(p => ({ ...p, trading_mode: 'simulation' }))}
+                      style={{
+                        padding: "1rem", borderRadius: "0.75rem", cursor: "pointer",
+                        border: formData.trading_mode === 'simulation' ? "2px solid #22c55e" : "1px solid var(--border)",
+                        background: formData.trading_mode === 'simulation' ? "rgba(34,197,94,0.08)" : "transparent",
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.3rem" }}>
+                        <span style={{ fontSize: "1.1rem" }}>🟢</span>
+                        <strong style={{ fontSize: "0.95rem", color: "#22c55e" }}>模擬交易模式</strong>
+                      </div>
+                      <p style={{ margin: 0, fontSize: "0.78rem", color: "var(--text-muted)", lineHeight: 1.5 }}>
+                        使用永豐金模擬撮合環境，零資金風險。可隨時清除紀錄並觀察模型自動產生的模擬單。
+                      </p>
+                    </div>
+
+                    <div
+                      onClick={() => setFormData(p => ({ ...p, trading_mode: 'live' }))}
+                      style={{
+                        padding: "1rem", borderRadius: "0.75rem", cursor: "pointer",
+                        border: formData.trading_mode === 'live' ? "2px solid #ef4444" : "1px solid var(--border)",
+                        background: formData.trading_mode === 'live' ? "rgba(239,68,68,0.08)" : "transparent",
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.3rem" }}>
+                        <span style={{ fontSize: "1.1rem" }}>🔴</span>
+                        <strong style={{ fontSize: "0.95rem", color: "#ef4444" }}>真實下單串接</strong>
+                      </div>
+                      <p style={{ margin: 0, fontSize: "0.78rem", color: "var(--text-muted)", lineHeight: 1.5 }}>
+                        綁定您個人的永豐金 API 金鑰，每日排程自動將策略訊號轉化為實盤委託送出！
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 憑證填寫區塊 */}
+                <div style={{
+                  padding: "1.25rem", borderRadius: "0.75rem",
+                  background: "rgba(128,128,128,0.04)", border: "1px solid var(--border)",
+                  marginBottom: "1.25rem"
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                      <Key size={16} />
+                      <strong style={{ fontSize: "0.9rem" }}>個人 Shioaji 憑證設定</strong>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-outline"
+                      style={{ padding: "0.2rem 0.6rem", fontSize: "0.75rem", borderRadius: "0.4rem" }}
+                      onClick={() => setShowSecrets(p => !p)}
+                    >
+                      {showSecrets ? "隱藏敏感資訊" : "顯示金鑰內容"}
+                    </button>
+                  </div>
+
+                  {/* API Key */}
+                  <div style={{ marginBottom: "0.85rem" }}>
+                    <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, marginBottom: "0.3rem" }}>
+                      Shioaji API Key：
+                    </label>
+                    <input
+                      type={showSecrets ? "text" : "password"}
+                      placeholder="請輸入永豐金 API Key"
+                      value={formData.shioaji_api_key}
+                      onChange={e => setFormData(p => ({ ...p, shioaji_api_key: e.target.value }))}
+                      style={{
+                        width: "100%", padding: "0.5rem 0.75rem", borderRadius: "0.5rem",
+                        border: "1px solid var(--border)", background: "var(--card-bg)", color: "inherit",
+                        fontSize: "0.85rem", fontFamily: "monospace"
+                      }}
+                    />
+                  </div>
+
+                  {/* Secret Key */}
+                  <div style={{ marginBottom: "0.85rem" }}>
+                    <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, marginBottom: "0.3rem" }}>
+                      Shioaji Secret Key：
+                    </label>
+                    <input
+                      type={showSecrets ? "text" : "password"}
+                      placeholder="請輸入永豐金 Secret Key"
+                      value={formData.shioaji_secret_key}
+                      onChange={e => setFormData(p => ({ ...p, shioaji_secret_key: e.target.value }))}
+                      style={{
+                        width: "100%", padding: "0.5rem 0.75rem", borderRadius: "0.5rem",
+                        border: "1px solid var(--border)", background: "var(--card-bg)", color: "inherit",
+                        fontSize: "0.85rem", fontFamily: "monospace"
+                      }}
+                    />
+                  </div>
+
+                  {/* 身分證字號 */}
+                  <div style={{ marginBottom: "0.85rem" }}>
+                    <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, marginBottom: "0.3rem" }}>
+                      開戶身分證字號 (Person ID)：
+                    </label>
+                    <input
+                      type={showSecrets ? "text" : "password"}
+                      placeholder="例如：A123456789 (啟動下單憑證時使用)"
+                      value={formData.person_id}
+                      onChange={e => setFormData(p => ({ ...p, person_id: e.target.value }))}
+                      style={{
+                        width: "100%", padding: "0.5rem 0.75rem", borderRadius: "0.5rem",
+                        border: "1px solid var(--border)", background: "var(--card-bg)", color: "inherit",
+                        fontSize: "0.85rem", fontFamily: "monospace"
+                      }}
+                    />
+                  </div>
+
+                  {/* CA 憑證密碼 */}
+                  <div>
+                    <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, marginBottom: "0.3rem" }}>
+                      CA 憑證密碼 (CA Password)：
+                    </label>
+                    <input
+                      type={showSecrets ? "text" : "password"}
+                      placeholder="永豐金 CA 憑證保護密碼"
+                      value={formData.ca_password}
+                      onChange={e => setFormData(p => ({ ...p, ca_password: e.target.value }))}
+                      style={{
+                        width: "100%", padding: "0.5rem 0.75rem", borderRadius: "0.5rem",
+                        border: "1px solid var(--border)", background: "var(--card-bg)", color: "inherit",
+                        fontSize: "0.85rem", fontFamily: "monospace"
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* 狀態訊息提示 */}
+                {configMsg && (
+                  <div style={{
+                    padding: "0.6rem 0.9rem", borderRadius: "0.5rem", fontSize: "0.82rem",
+                    background: configMsg.startsWith('✅') ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)",
+                    color: configMsg.startsWith('✅') ? "#22c55e" : "#ef4444",
+                    marginBottom: "1rem", fontWeight: 600
+                  }}>
+                    {configMsg}
+                  </div>
+                )}
+
+                {/* 按鈕群 */}
+                <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+                  <button
+                    type="submit"
+                    className="btn btn-black"
+                    disabled={savingConfig}
+                    style={{ padding: "0.5rem 1.25rem", fontSize: "0.88rem", borderRadius: "0.5rem" }}
+                  >
+                    {savingConfig ? "儲存中..." : "💾 儲存並套用串接設定"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    onClick={handleResetCredentials}
+                    style={{ padding: "0.5rem 1rem", fontSize: "0.82rem", borderRadius: "0.5rem", color: "#ef4444", borderColor: "#ef4444" }}
+                  >
+                    🔄 清除個人金鑰並重置為模擬
+                  </button>
+                </div>
+              </form>
+
+              {/* 串接說明 */}
+              <div style={{
+                marginTop: "1.5rem", paddingTop: "1rem", borderTop: "1px solid var(--border)",
+                fontSize: "0.78rem", color: "var(--text-muted)", lineHeight: 1.7
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", marginBottom: "0.35rem", fontWeight: 600, color: "var(--text)" }}>
+                  <Shield size={14} color="#22c55e" /> 串接指南與安全保證：
+                </div>
+                <ul style={{ margin: 0, paddingLeft: "1.2rem" }}>
+                  <li><strong>如何取得 API 金鑰：</strong> 請至永豐金證券官網申請 Python API 權限（<a href="https://sinotrade.github.io/" target="_blank" rel="noreferrer" style={{ color: "var(--accent)", textDecoration: "underline" }}>官方說明連結</a>）。</li>
+                  <li><strong>CA 憑證認證：</strong> 下載的 <code>Sinopac.pfx</code> 憑證檔請妥善保管，或聯絡系統管理員協助配置於獨立交易安全環境。</li>
+                  <li><strong>隨時切換：</strong> 您可以隨時在此切換「模擬」或「真實下單」，若暫時想停止自動下單，切換為模擬模式即可，不會動用真實資金。</li>
+                </ul>
               </div>
             </div>
           </div>

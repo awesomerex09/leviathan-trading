@@ -10,6 +10,7 @@ import {
   adminDbUpdateStrategyParams,
   adminDbGetSignals,
   adminDbGetSimOrders,
+  adminDbClearSimOrders,
   STRATEGY_PARAM_SCHEMA,
 } from '../adminDb';
 
@@ -420,9 +421,35 @@ const AdminDashboard = ({ user, t }) => {
               : (
                 <>
                   {/* 模擬委託 */}
-                  {simOrders.length > 0 && (
-                    <div style={{ marginBottom: '2rem' }}>
-                      <h4 style={{ marginBottom: '1rem', fontSize: '1rem' }}>🔬 模擬委託紀錄（Shioaji sim_orders）</h4>
+                  <div style={{ marginBottom: '2rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                      <h4 style={{ margin: 0, fontSize: '1rem' }}>🔬 模擬委託紀錄（Shioaji sim_orders: {simOrders.length} 筆）</h4>
+                      {simOrders.length > 0 && (
+                        <button
+                          className="btn btn-outline"
+                          style={{ padding: '0.25rem 0.75rem', fontSize: '0.78rem', color: '#ef4444', borderColor: '#ef4444' }}
+                          onClick={async () => {
+                            if (window.confirm(`確定要清空所有 ${simOrders.length} 筆模擬委託記錄嗎？此動作無法復原。`)) {
+                              setSignalsLoading(true);
+                              try {
+                                await adminDbClearSimOrders();
+                                await fetchSignals();
+                                alert('✅ 已成功清空模擬委託紀錄！');
+                              } catch (e) {
+                                alert('清空失敗: ' + e.message);
+                              } finally {
+                                setSignalsLoading(false);
+                              }
+                            }
+                          }}
+                        >
+                          🗑️ 清空所有模擬單記錄
+                        </button>
+                      )}
+                    </div>
+                    {simOrders.length === 0 ? (
+                      <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>尚無模擬委託記錄（已歸零）</p>
+                    ) : (
                       <div className="orders-table">
                         <table>
                           <thead>
@@ -452,8 +479,8 @@ const AdminDashboard = ({ user, t }) => {
                           </tbody>
                         </table>
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
 
                   {/* 策略訊號 */}
                   <h4 style={{ marginBottom: '1rem', fontSize: '1rem' }}>

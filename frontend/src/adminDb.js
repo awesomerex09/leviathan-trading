@@ -6,7 +6,7 @@
 import { db, auth, ADMIN_UID } from './firebase';
 import {
   doc, getDoc, setDoc, collection, getDocs,
-  serverTimestamp, query, orderBy, limit,
+  serverTimestamp, query, orderBy, limit, writeBatch,
 } from 'firebase/firestore';
 
 function assertAdmin() {
@@ -163,4 +163,13 @@ export async function adminDbGetSimOrders(limitCount = 50) {
       .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''))
       .slice(0, limitCount);
   }
+}
+
+export async function adminDbClearSimOrders() {
+  assertAdmin();
+  const snap = await getDocs(collection(db, 'sim_orders'));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+  return { success: true, count: snap.docs.length };
 }
