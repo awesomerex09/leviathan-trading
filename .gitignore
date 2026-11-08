@@ -1,24 +1,41 @@
-# Dependencies
+# ============================================================
+# LVIS Leviathan Trading System - .gitignore
+# ============================================================
+
+# ── Node.js / Frontend ──────────────────────────────────────
 node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.env
+frontend/.env.local
+
+# ── Python ──────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
 *.egg-info/
+venv/
+env/
+.venv/
 
-# 後端伺服器程式碼（機密，只存 Mac mini 本機，不上傳 Public repo）
-server/
-v6.txt
-list.txt
+# ── 後端伺服器（機密）────────────────────────────────────────
+# server/ 整個目錄不上傳（含策略邏輯、API 金鑰、憑證）
+# 以下明確列出各類型以防萬一
+server/lvis_strategy.py        # LVIS 策略核心邏輯（商業機密）
+server/live_trader.py          # 真實交易執行器
+server/serviceAccountKey.json  # Firebase Admin 金鑰
+server/.env                    # 環境變數（含 API Key）
+server/Sinopac.pfx             # CA 憑證
+server/shioaji.log             # 交易日誌（含委託明細）
+server/__pycache__/
 
+# ── 策略原始檔 ───────────────────────────────────────────────
+v6.txt       # Pine Script 策略原始碼
+list.txt     # 自定義標的清單
 
-# Build outputs
-frontend/dist/
-frontend/.vite/
-
-# Secrets - NEVER commit these!
-server/serviceAccountKey.json
+# ── 環境變數 & 金鑰 ─────────────────────────────────────────
 .env
 .env.local
 .env.*.local
@@ -26,27 +43,22 @@ server/serviceAccountKey.json
 *.pfx
 *.pem
 *.key
-Sinopac.pfx
+*.json.bak
+
+# ── Firebase 本地設定 ────────────────────────────────────────
 firebase.json
 .firebaserc
 
-# OS files
-.DS_Store
-Thumbs.db
-
-# Logs
+# ── 日誌 ────────────────────────────────────────────────────
 *.log
 logbook.log
+logs/
 
-# IDE
+# ── 本機執行腳本（含機器絕對路徑，不適合上傳）────────────────
+run_*.bat
+
+# ── OS / IDE ────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
 .vscode/
 .idea/
-
-# Python venv
-venv/
-env/
-.venv/
-
-# Local runner scripts (machine-specific paths)
-run_*.bat
-logs/
