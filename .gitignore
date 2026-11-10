@@ -22,18 +22,16 @@ env/
 
 # ── 後端伺服器（機密）────────────────────────────────────────
 # server/ 整個目錄不上傳（含策略邏輯、API 金鑰、憑證）
-# 以下明確列出各類型以防萬一
-server/lvis_strategy.py        # LVIS 策略核心邏輯（商業機密）
-server/live_trader.py          # 真實交易執行器
-server/serviceAccountKey.json  # Firebase Admin 金鑰
-server/.env                    # 環境變數（含 API Key）
-server/Sinopac.pfx             # CA 憑證
-server/shioaji.log             # 交易日誌（含委託明細）
-server/__pycache__/
+server/
+server/*
+
 
 # ── 策略原始檔 ───────────────────────────────────────────────
-v6.txt       # Pine Script 策略原始碼
-list.txt     # 自定義標的清單
+# Pine Script 策略原始碼
+v6.txt
+# 自定義標的清單
+list.txt
+*.txt
 
 # ── 環境變數 & 金鑰 ─────────────────────────────────────────
 .env

@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import Chart from "../Chart";
 
-const INIT_CAP = 875_000;
+const INIT_CAP = 10_000_000; // 模擬起始本金：一千萬元 (符合台股張數與高價股保證金需求)
 
 // 常用標的繁中名稱字典（提供直覺的股票對照）
 const SYMBOL_NAMES = {
@@ -238,23 +238,26 @@ export default function ClientDashboard({ user, t, isPaid }) {
     for (const o of sortedOrders) {
       const { symbol, type, price, qty } = o;
       if (!price || !qty) continue;
+      const isTW = Boolean(symbol && symbol.match(/^\d+$/));
+      const mult = isTW ? 1000 : 1; // 台股 1 張 = 1000 股
+
       if (type && (type.includes("ENTRY") || type.includes("SCALE") || type.includes("BUY"))) {
         positions[symbol] = positions[symbol] || { qty: 0, totalCost: 0, lastPrice: price };
         positions[symbol].qty += qty;
-        positions[symbol].totalCost += price * qty;
+        positions[symbol].totalCost += price * qty * mult;
         positions[symbol].lastPrice = price;
-        cash -= price * qty;
+        cash -= price * qty * mult;
       } else if (type && (type.includes("EXIT") || type.includes("SELL"))) {
         const pos = positions[symbol];
         if (pos && pos.qty > 0) {
-          const avgCost = pos.totalCost / pos.qty;
+          const avgPerShare = pos.totalCost / (pos.qty * mult);
           const closeQty = Math.min(qty, pos.qty);
-          realPnl += (price - avgCost) * closeQty;
+          realPnl += (price - avgPerShare) * closeQty * mult;
           pos.qty -= closeQty;
-          pos.totalCost -= avgCost * closeQty;
+          pos.totalCost -= avgPerShare * closeQty * mult;
           pos.lastPrice = price;
           if (pos.qty <= 0) delete positions[symbol];
-          cash += price * qty;
+          cash += price * closeQty * mult;
         }
       }
     }
@@ -272,15 +275,17 @@ export default function ClientDashboard({ user, t, isPaid }) {
     let totalPositionValue = 0;
 
     const openPos = Object.entries(positions).map(([sym, pos]) => {
-      const mkt = latestPrice[sym]?.price || pos.lastPrice || (pos.totalCost / pos.qty);
-      const avg = pos.totalCost / pos.qty;
-      const pnl = (mkt - avg) * pos.qty;
-      const val = mkt * pos.qty;
+      const isTW = Boolean(sym.match(/^\d+$/));
+      const mult = isTW ? 1000 : 1;
+      const mkt = latestPrice[sym]?.price || pos.lastPrice || (pos.totalCost / (pos.qty * mult));
+      const avg = pos.qty > 0 ? (pos.totalCost / (pos.qty * mult)) : 0;
+      const pnl = (mkt - avg) * pos.qty * mult;
+      const val = mkt * pos.qty * mult;
       unrealPnl += pnl;
       totalPositionValue += val;
       return {
         symbol: sym,
-        name: SYMBOL_NAMES[sym] || (sym.match(/^\d+$/) ? '台股' : '美股'),
+        name: SYMBOL_NAMES[sym] || (isTW ? '台股' : '美股'),
         qty: pos.qty,
         avg,
         mkt,
@@ -291,11 +296,11 @@ export default function ClientDashboard({ user, t, isPaid }) {
     });
 
     const totalPnl = realPnl + unrealPnl;
-    const totalEquity = Math.max(0, cash) + totalPositionValue;
+    const totalEquity = cash + totalPositionValue;
 
     setPortfolio({
       initCap: INIT_CAP,
-      cash: Math.max(0, cash),
+      cash,
       totalEquity,
       positionValue: totalPositionValue,
       pnl: totalPnl,

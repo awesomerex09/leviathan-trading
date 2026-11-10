@@ -227,32 +227,47 @@ const AdminDashboard = ({ user, t }) => {
                                   <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>排程掃描等待觸發中（每日 13:35 台股 / 04:10 美股自動執行）</p>
                                 ) : (
                                   <div className="orders-table mini" style={{ marginTop: '0.5rem' }}>
-                                    <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--accent)', marginBottom: '0.4rem' }}>
-                                      📋 最新自動模擬下單紀錄（Shioaji API · 最新 {Math.min(simOrders.length, 6)} 筆）：
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                                      <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--accent)' }}>
+                                        📋 系統自動模擬委託紀錄（共 {simOrders.length} 筆，顯示最新 {Math.min(simOrders.length, 12)} 筆）：
+                                      </div>
                                     </div>
                                     <table>
                                       <thead><tr><th>時間</th><th>標的</th><th>市場</th><th>動作</th><th>價格</th><th>張數/股數</th><th>單號</th><th>狀態</th></tr></thead>
                                       <tbody>
-                                        {simOrders.slice(0, 6).map((o, i) => (
-                                          <tr key={i}>
-                                            <td style={{ fontSize: '0.75rem' }}>{new Date(o.timestamp).toLocaleString('zh-TW')}</td>
-                                            <td><strong>{o.symbol}</strong></td>
-                                            <td>
-                                              <span style={{ fontSize: '0.72rem', padding: '0.1rem 0.35rem', borderRadius: '0.25rem', background: 'rgba(128,128,128,0.1)' }}>
-                                                {o.market || (o.symbol?.match(/^\d+$/) ? 'TW' : 'US')}
-                                              </span>
-                                            </td>
-                                            <td>
-                                              <span className={`badge ${o.type?.includes('BUY') ? 'badge-buy' : 'badge-sell'}`}>
-                                                {o.type?.includes('BUY') ? '買進' : '賣出'}
-                                              </span>
-                                            </td>
-                                            <td>{o.price?.toLocaleString()}</td>
-                                            <td>{o.qty} {o.market === 'TW' || o.symbol?.match(/^\d+$/) ? '張' : '股'}</td>
-                                            <td><code style={{ fontSize: '0.75rem' }}>{o.order_id || '模擬下單'}</code></td>
-                                            <td><span className="badge badge-success">✓ {o.status?.replace('OrderStatus.', '') || '成功'}</span></td>
-                                          </tr>
-                                        ))}
+                                        {simOrders.slice(0, 12).map((o, i) => {
+                                          const rawStatus = o.status || '';
+                                          const isFailed = rawStatus.includes('Failed') || rawStatus.includes('failed') || (!o.order_id && rawStatus !== '');
+                                          const isPending = rawStatus.includes('PendingSubmit');
+                                          return (
+                                            <tr key={i}>
+                                              <td style={{ fontSize: '0.75rem' }}>{new Date(o.timestamp).toLocaleString('zh-TW')}</td>
+                                              <td><strong>{o.symbol}</strong></td>
+                                              <td>
+                                                <span style={{ fontSize: '0.72rem', padding: '0.1rem 0.35rem', borderRadius: '0.25rem', background: 'rgba(128,128,128,0.1)' }}>
+                                                  {o.market || (o.symbol?.match(/^\d+$/) ? 'TW' : 'US')}
+                                                </span>
+                                              </td>
+                                              <td>
+                                                <span className={`badge ${o.type?.includes('BUY') ? 'badge-buy' : 'badge-sell'}`}>
+                                                  {o.type?.includes('BUY') ? '買進' : '賣出'}
+                                                </span>
+                                              </td>
+                                              <td>{o.price?.toLocaleString()}</td>
+                                              <td>{o.qty} {o.market === 'TW' || o.symbol?.match(/^\d+$/) ? '張' : '股'}</td>
+                                              <td><code style={{ fontSize: '0.75rem' }}>{o.order_id || '無單號'}</code></td>
+                                              <td>
+                                                {isFailed ? (
+                                                  <span style={{ color: '#ef4444', fontSize: '0.75rem', fontWeight: 700 }}>❌ 失敗</span>
+                                                ) : isPending ? (
+                                                  <span style={{ color: '#22c55e', fontSize: '0.75rem', fontWeight: 700 }}>✅ 送出</span>
+                                                ) : (
+                                                  <span style={{ fontSize: '0.75rem' }}>{rawStatus.replace('OrderStatus.', '')}</span>
+                                                )}
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
                                       </tbody>
                                     </table>
                                   </div>
