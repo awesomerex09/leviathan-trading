@@ -233,11 +233,17 @@ export default function ClientDashboard({ user, t, isPaid }) {
     const positions = {};
     let realPnl = 0;
 
-    // 1. 處理已送出的模擬委託
+    // 1. 處理已送出的有效委託（嚴格過濾：被券商拒絕或失敗之委託不計入持倉）
     const sortedOrders = [...visibleOrders].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
     for (const o of sortedOrders) {
       const { symbol, type, price, qty } = o;
       if (!price || !qty) continue;
+
+      // 關鍵防呆：若委託狀態為 Failed 或無單號失敗，表示券商端未成交，不可計入真實持倉
+      const rawStatus = o.status || '';
+      const isFailed = rawStatus.includes('Failed') || rawStatus.includes('failed') || (!o.order_id && rawStatus !== '');
+      if (isFailed) continue;
+
       const isTW = Boolean(symbol && symbol.match(/^\d+$/));
       const mult = isTW ? 1000 : 1; // 台股 1 張 = 1000 股
 
@@ -669,7 +675,8 @@ export default function ClientDashboard({ user, t, isPaid }) {
                       <span>📈 台灣習慣：<strong style={{ color: "#ef4444" }}>紅漲</strong> / <strong style={{ color: "#22c55e" }}>綠跌</strong></span>
                       <span>▲ <strong style={{ color: "#ef4444" }}>進場 / 加碼買進</strong>（標記於 K 棒下方）</span>
                       <span>▼ <strong style={{ color: "#3b82f6" }}>停損 / 獲利出場</strong>（標記於 K 棒上方）</span>
-                      <span>💡 支援滾輪放大縮小、按住拖曳歷史時間軸</span>
+                      <span>💡 <strong>說明</strong>：圖中箭頭代表 LVIS V2 演算法即時偵測之策略進出場點位；實際券商下單執行結果請點選「委託紀錄」對照單號與狀態。</span>
+                      <span>🔍 支援滾輪放大縮小、按住拖曳歷史時間軸</span>
                     </div>
                   </>
                 )}

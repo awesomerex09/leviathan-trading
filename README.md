@@ -53,28 +53,48 @@ GitHub Pages（公開前端）
 
 ---
 
-## 每日自動排程
+## 每日自動排程與高可靠機制
 
-系統使用 **Windows 工作排程器（Task Scheduler）** 自動執行，無需人工干預：
+系統使用 **Windows 工作排程器（Task Scheduler）** 自動執行，具備離線與鎖屏補跑的高可靠機制：
 
-| 任務名稱 | 執行時間（台北） | 說明 |
-|----------|-----------------|------|
-| `LVIS_TW_DailyStockScan` | 週一～五 **13:35** | 台股收盤後掃描 |
-| `LVIS_US_DailyStockScan` | 週一～五 **04:10** | 美股收盤後掃描 |
+| 任務名稱 | 執行時間（台北） | 特性設定 | 說明 |
+|----------|-----------------|---------|------|
+| `LVIS_TW_DailyStockScan` | 每日 **13:35** | `StartWhenAvailable=true` | 台股盤後掃描，若遇鎖屏或關機錯過，開機後自動立即補跑 |
+| `LVIS_US_DailyStockScan` | 每日 **04:10** | `StartWhenAvailable=true` | 美股收盤掃描，若遇休眠錯過，開機後自動立即補跑 |
+
+**排程保護策略：**
+1. **防錯過補發（StartWhenAvailable）**：解決先前 Windows `Interactive only` 模式因鎖屏或睡眠而靜默跳過的問題，只要電腦開機即刻補跑。
+2. **週末休市防呆**：週六與週日自動過濾向券商送出重複/無效委託，僅同步日線快取與計算訊號；支援 `--force` 參數供測試時強制送單。
+3. **電池與電源優化**：移除了筆電電池限制（`StopIfGoingOnBatteries=false`），不論插電或使用電池均穩定運行。
 
 **執行流程：**
-1. `run_simulation.py` 啟動
-2. Shioaji 登入（simulation=True 或 False）
+1. `run_simulation.py` 啟動（帶市場過濾 `--market TW` 或 `--market US`）
+2. Shioaji API 登入（模擬或真實模式）
 3. 🔄 **補單檢查**：讀取上次失敗的委託，若訊號仍有效自動重試（最多 3 次）
-4. 下載 benchmark（0050.TW）
-5. 台股 31 個標的：yfinance → LVIS V2 → Shioaji 下委託
-6. 美股 18 個標的：yfinance → LVIS V2 → 訊號寫 Firestore
-7. 更新 price_data（前端 K 線圖真實行情）
-8. 所有訊號 + 委託寫入 Firestore
+4. 下載基準大盤資料（0050.TW）
+5. 標的掃描：yfinance 真實日線 → LVIS V2 策略運算 → 符合條件即送 Shioaji 委託
+6. 更新真實日線至 Firestore `price_data/`（供前端 K 線圖展示）
+7. 策略訊號寫入 `signals/`，委託狀態寫入 `sim_orders/`
 
 **日誌路徑：**
 - `logs/lvis_tw.log`（台股排程）
 - `logs/lvis_us.log`（美股排程）
+
+---
+
+## 策略訊號 vs 委託執行架構
+
+系統區分兩層資料來源，避免前端對帳混淆：
+
+1. **策略訊號層（Signals）**：
+   - 記錄於 Firestore `signals/`
+   - 由 LVIS V2 演算法根據技術指標（結構進場、趨勢進場、動態加碼、停損/停利出場）運算出的進出場建議。
+   - 前端 K 線圖上的箭頭標記（紅買/藍賣）忠實呈現策略演算法的判斷。
+2. **券商委託層（Sim Orders）**：
+   - 記錄於 Firestore `sim_orders/`
+   - 實際送往永豐金 Shioaji API 撮合主機之委託，包含專屬單號（Order ID）與即時狀態（`PendingSubmit`、`Failed` 等）。
+   - **持倉對帳防呆升級**：前端「投資組合對帳」已全面排除 `Failed`（失敗或未成交）委託，僅將券商受理之有效委託納入持倉與損益試算，徹底杜絕幽靈部位。
+   - **單位換算標準**：台股每張乘數為 1,000 股，模擬起始本金設定為 NT$ 10,000,000，真實呈現百元至千元高價股（如高力、台達電、台積電）之市值規模。
 
 ---
 
