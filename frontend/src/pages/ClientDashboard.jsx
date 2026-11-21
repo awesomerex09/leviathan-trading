@@ -637,6 +637,29 @@ export default function ClientDashboard({ user, t, isPaid }) {
                       {ohlcLoading ? "載入真實行情資料中..." : "切換標的中..."}
                     </p>
                   </div>
+                ) : !isRealData && (!chartData || chartData.length < 5) ? (
+                  /* 無真實 OHLC 且無訊號時間軸可用：顯示明確的「暫無行情」說明，不顯示假 K 線 */
+                  <div style={{
+                    textAlign: "center", padding: "3.5rem 2rem",
+                    background: "rgba(239,68,68,0.04)", borderRadius: "0.75rem",
+                    border: "1px dashed rgba(239,68,68,0.25)"
+                  }}>
+                    <div style={{ fontSize: "2.5rem", marginBottom: "0.75rem" }}>📉</div>
+                    <h3 style={{ margin: "0 0 0.5rem", fontSize: "1rem", fontWeight: 700 }}>
+                      {selectedSym} {SYMBOL_NAMES[selectedSym] || ''} · 暫無行情資料
+                    </h3>
+                    <p style={{ margin: "0 0 0.75rem", color: "var(--text-muted)", fontSize: "0.85rem", maxWidth: 420, marginInline: "auto" }}>
+                      此標的目前在 Firestore 中尚無真實 K 線快取。可能原因：
+                    </p>
+                    <ul style={{ display: "inline-block", textAlign: "left", color: "var(--text-muted)", fontSize: "0.82rem", lineHeight: 1.8 }}>
+                      <li>yfinance 查無此標的的行情資料（如上櫃標的 ticker 格式問題）</li>
+                      <li>後端排程尚未執行（每日 13:35 台股 / 23:00 美股 自動更新）</li>
+                      <li>標的可能暫停交易或已下市</li>
+                    </ul>
+                    <p style={{ margin: "0.75rem 0 0", color: "var(--text-muted)", fontSize: "0.78rem" }}>
+                      ⏳ 下次後端排程執行後將自動同步，或請聯繫管理員確認標的狀態。
+                    </p>
+                  </div>
                 ) : (
                   <>
                     {/* 資料來源標示 */}
