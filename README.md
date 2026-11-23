@@ -59,22 +59,25 @@ GitHub Pages（公開前端）
 
 | 任務名稱 | 執行時間（台北） | 特性設定 | 說明 |
 |----------|-----------------|---------|------|
-| `LVIS_TW_DailyStockScan` | 每日 **13:35** | `StartWhenAvailable=true` | 台股盤後掃描，若遇鎖屏或關機錯過，開機後自動立即補跑 |
+| `LVIS_TW_DailyStockScan` | 每日 **13:25** | `StartWhenAvailable=true` | 台股盤前 5 分鐘啟動，合約下載（~60s）後約 13:27 下單，在 13:30 收盤前完成 |
 | `LVIS_US_DailyStockScan` | 每日 **04:10** | `StartWhenAvailable=true` | 美股收盤掃描，若遇休眠錯過，開機後自動立即補跑 |
+
+> ⚠️ **排程時間說明（2026-11-23 更新）**：台股排程從原本 13:35（盤後）改為 **13:25（盤前）**，原因是 Shioaji 合約下載（`fetch_contracts`）耗時約 60 秒，若 13:35 啟動，實際下單時間已超過 13:30 收盤，Shioaji 模擬環境會拒絕所有 ROD 委託。現改為 13:25 啟動確保下單在 13:33 緩衝截止前完成。
 
 **排程保護策略：**
 1. **防錯過補發（StartWhenAvailable）**：解決先前 Windows `Interactive only` 模式因鎖屏或睡眠而靜默跳過的問題，只要電腦開機即刻補跑。
-2. **週末休市防呆**：週六與週日自動過濾向券商送出重複/無效委託，僅同步日線快取與計算訊號；支援 `--force` 參數供測試時強制送單。
-3. **電池與電源優化**：移除了筆電電池限制（`StopIfGoingOnBatteries=false`），不論插電或使用電池均穩定運行。
+2. **下單時間防呆**：STEP 5 下單前確認目前時間 ≤ 13:33，超過則自動跳過並寫入 `failed_orders` 補單佇列，下個交易日補單。
+3. **週末休市防呆**：週六與週日自動過濾向券商送出重複/無效委託，僅同步日線快取與計算訊號；支援 `--force` 參數供測試時強制送單。
+4. **電池與電源優化**：移除了筆電電池限制（`StopIfGoingOnBatteries=false`），不論插電或使用電池均穩定運行。
 
 **執行流程：**
-1. `run_simulation.py` 啟動（帶市場過濾 `--market TW` 或 `--market US`）
-2. Shioaji API 登入（模擬或真實模式）
-3. 🔄 **補單檢查**：讀取上次失敗的委託，若訊號仍有效自動重試（最多 3 次）
-4. 下載基準大盤資料（0050.TW）
-5. 標的掃描：yfinance 真實日線 → LVIS V2 策略運算 → 符合條件即送 Shioaji 委託
-6. 更新真實日線至 Firestore `price_data/`（供前端 K 線圖展示）
-7. 策略訊號寫入 `signals/`，委託狀態寫入 `sim_orders/`
+1. 13:25 啟動 `run_simulation.py --market TW`
+2. Shioaji API 登入（模擬或真實模式）（~5s）
+3. **STEP 2** Shioaji 合約下載（`fetch_contracts`，約需 60s）
+4. 🔄 **STEP 4.5** 補單檢查：讀取上次失敗的委託，若訊號仍有效自動重試（最多 3 次）
+5. **STEP 5**（約 13:27）標的掃描：yfinance 真實日線 → LVIS V2 策略運算 → 有訊號且仍在 13:33 前 → 送 Shioaji 委託
+6. **STEP 6.5** 更新真實日線至 Firestore `price_data/`（供前端 K 線圖展示）
+7. **STEP 8** 策略訊號寫入 `signals/`，委託狀態寫入 `sim_orders/`
 
 **日誌路徑：**
 - `logs/lvis_tw.log`（台股排程）
